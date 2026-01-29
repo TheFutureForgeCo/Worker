@@ -66,19 +66,29 @@ function getOllamaBinaryPath() {
   return path.join(OLLAMA_BIN_DIR, 'ollama');
 }
 
+// Get the correct path for source files (handles packaged app)
+function getSourcePath(filename) {
+  if (app.isPackaged) {
+    // In packaged app, use the unpacked resources path
+    return path.join(process.resourcesPath, 'app.asar.unpacked', 'src', filename);
+  }
+  return path.join(__dirname, filename);
+}
+
 // Generate app signature for integrity verification
 function generateAppSignature() {
-  const workerPath = path.join(__dirname, 'worker.js');
-  const mainPath = path.join(__dirname, 'main.js');
-  
   try {
+    const workerPath = getSourcePath('worker.js');
+    const mainPath = getSourcePath('main.js');
+    
     const workerContent = fs.readFileSync(workerPath, 'utf8');
     const mainContent = fs.readFileSync(mainPath, 'utf8');
     const combined = workerContent + mainContent + APP_VERSION;
     return crypto.createHash('sha256').update(combined).digest('hex').substring(0, 16);
   } catch (err) {
-    logError('Failed to generate signature', err);
-    return 'unknown';
+    // In packaged app, files may not be accessible - use version-based signature
+    logError('Failed to generate signature from files, using version-based signature', err);
+    return crypto.createHash('sha256').update(APP_VERSION + 'computegrid').digest('hex').substring(0, 16);
   }
 }
 
