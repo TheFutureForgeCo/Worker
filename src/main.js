@@ -1017,6 +1017,8 @@ async function setupOllamaOnStartup() {
 // Setup auto-updater with silent background installation
 let pendingUpdateVersion = null;
 let updateCheckInterval = null;
+let idleInstallInterval = null;
+let isInstallingUpdate = false;
 
 function setupAutoUpdater() {
   autoUpdater.autoDownload = true;
@@ -1084,33 +1086,55 @@ function setupAutoUpdater() {
   }, 60 * 60 * 1000);
 }
 
+// Check if worker process is truly stopped (not just isWorkerRunning flag)
+function isWorkerFullyStopped() {
+  return !isWorkerRunning && workerProcess === null;
+}
+
 // Attempt to silently install update when worker is idle
 function attemptSilentInstall(version) {
-  // If worker is not running, install immediately (silently)
-  if (!isWorkerRunning) {
-    console.log('Worker idle - installing update silently...');
-    showNotification('Updating', `Installing v${version}...`);
+  // Prevent multiple install attempts
+  if (isInstallingUpdate) {
+    console.log('Update installation already in progress');
+    return;
+  }
+  
+  // Clear any existing idle check interval
+  if (idleInstallInterval) {
+    clearInterval(idleInstallInterval);
+    idleInstallInterval = null;
+  }
+  
+  // If worker is fully stopped, install after a safety delay
+  if (isWorkerFullyStopped()) {
+    console.log('Worker idle - scheduling update installation...');
+    isInstallingUpdate = true;
+    showNotification('Update Ready', `v${version} will install in 10 seconds...`);
     
-    // Small delay to show notification, then install
+    // Wait 10 seconds to ensure everything is settled
     setTimeout(() => {
-      autoUpdater.quitAndInstall(true, true); // silent, force quit
-    }, 2000);
+      // Re-check worker is still stopped
+      if (isWorkerFullyStopped()) {
+        console.log('Installing update...');
+        autoUpdater.quitAndInstall(false, true); // Not silent (show progress), force quit
+      } else {
+        // Worker started again, reschedule
+        isInstallingUpdate = false;
+        attemptSilentInstall(version);
+      }
+    }, 10000);
     return;
   }
   
   // Worker is running - check periodically for idle state
   console.log('Worker running - waiting for idle state to install update...');
-  showNotification('Update Ready', `v${version} will install when worker is idle`);
+  showNotification('Update Ready', `v${version} will install when worker stops`);
   
-  const idleCheckInterval = setInterval(() => {
-    if (!isWorkerRunning) {
-      clearInterval(idleCheckInterval);
-      console.log('Worker now idle - installing update...');
-      showNotification('Updating', `Installing v${version}...`);
-      
-      setTimeout(() => {
-        autoUpdater.quitAndInstall(true, true);
-      }, 2000);
+  idleInstallInterval = setInterval(() => {
+    if (isWorkerFullyStopped() && !isInstallingUpdate) {
+      clearInterval(idleInstallInterval);
+      idleInstallInterval = null;
+      attemptSilentInstall(version);
     }
   }, 30000); // Check every 30 seconds
 }
