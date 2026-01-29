@@ -36,25 +36,16 @@
       "src/**/*",
       "assets/**/*"
     ],
-    "publish": {
-      "provider": "github",
-      "owner": "TheFutureForgeCo",
-      "repo": "Worker"
-    },
-    "win": {
-      "target": ["nsis", "portable"],
-      "publisherName": "ComputeGrid"
-    },
     "linux": {
-      "target": ["AppImage"],
+      "target": [
+        "AppImage"
+      ],
       "category": "Utility"
     },
-    "nsis": {
-      "oneClick": true,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": false,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+    "win": {
+      "target": [
+        "nsis"
+      ]
     }
   }
 }
