@@ -781,13 +781,19 @@ async function deleteModel(modelName) {
 
 // Toggle online status
 async function toggleOnlineStatus() {
+  log(`toggleOnlineStatus called - apiKey: ${config.apiKey ? 'present (' + config.apiKey.substring(0, 10) + '...)' : 'MISSING'}`);
+  
   if (!config.apiKey) {
     logError('API key required to go online');
+    stats.status = 'API key required';
+    stats.lastError = 'Please enter your API key first';
+    sendStatusToRenderer();
     return false;
   }
   
   const newStatus = !isOnline;
   log(`Toggling online status to: ${newStatus}`);
+  log(`Making request to: ${SERVER_URL}/api/worker/set-online`);
   
   try {
     // Update server
@@ -795,6 +801,8 @@ async function toggleOnlineStatus() {
       method: 'POST',
       body: { isOnline: newStatus }
     });
+    
+    log(`Set-online response: status=${result.status}, data=${JSON.stringify(result.data)}`);
     
     if (result.status === 200) {
       isOnline = newStatus;
@@ -811,10 +819,15 @@ async function toggleOnlineStatus() {
       return true;
     } else {
       logError('Failed to update online status: ' + JSON.stringify(result.data));
+      stats.lastError = result.data?.message || `Server error: ${result.status}`;
+      sendStatusToRenderer();
       return false;
     }
   } catch (err) {
-    logError('Failed to toggle online status', err);
+    logError('Failed to toggle online status - NETWORK ERROR', err);
+    log(`Error details: ${err.code || 'no code'} - ${err.message}`);
+    stats.lastError = `Network error: ${err.message}`;
+    sendStatusToRenderer();
     return false;
   }
 }
@@ -822,6 +835,8 @@ async function toggleOnlineStatus() {
 // Make HTTP request helper
 function makeRequest(url, options = {}) {
   return new Promise((resolve, reject) => {
+    log(`[makeRequest] ${options.method || 'GET'} ${url}`);
+    
     const parsedUrl = new URL(url);
     const isHttps = parsedUrl.protocol === 'https:';
     const lib = isHttps ? https : http;
@@ -835,13 +850,18 @@ function makeRequest(url, options = {}) {
         'Content-Type': 'application/json',
         'X-API-Key': config.apiKey,
         ...options.headers
-      }
+      },
+      timeout: 30000
     };
+    
+    log(`[makeRequest] Connecting to ${reqOptions.hostname}:${reqOptions.port}${reqOptions.path}`);
 
     const req = lib.request(reqOptions, (res) => {
+      log(`[makeRequest] Got response: ${res.statusCode}`);
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
+        log(`[makeRequest] Response body: ${data.substring(0, 200)}`);
         try {
           const parsed = JSON.parse(data);
           resolve({ status: res.statusCode, data: parsed });
@@ -851,10 +871,21 @@ function makeRequest(url, options = {}) {
       });
     });
 
-    req.on('error', reject);
+    req.on('error', (err) => {
+      log(`[makeRequest] REQUEST ERROR: ${err.code || 'unknown'} - ${err.message}`);
+      reject(err);
+    });
+    
+    req.on('timeout', () => {
+      log(`[makeRequest] REQUEST TIMEOUT`);
+      req.destroy();
+      reject(new Error('Request timeout'));
+    });
     
     if (options.body) {
-      req.write(JSON.stringify(options.body));
+      const bodyStr = JSON.stringify(options.body);
+      log(`[makeRequest] Sending body: ${bodyStr}`);
+      req.write(bodyStr);
     }
     
     req.end();
