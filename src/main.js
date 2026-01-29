@@ -115,6 +115,10 @@ let setupProgress = 0;
 let lastError = null;
 let isOnline = false;
 let manualStop = false; // Track if worker was manually stopped (vs crashed)
+let lastWorkerActivity = Date.now();
+let watchdogInterval = null;
+const WATCHDOG_TIMEOUT_MS = 60000; // 60 seconds without activity = unresponsive
+const WATCHDOG_CHECK_INTERVAL_MS = 15000; // Check every 15 seconds
 
 // Logging functions
 function log(message) {
@@ -967,6 +971,8 @@ async function startWorker() {
       const message = data.toString();
       log('[Worker] ' + message.trim());
       parseWorkerOutput(message);
+      // Update activity timestamp on any output
+      lastWorkerActivity = Date.now();
     });
 
     workerProcess.stderr.on('data', (data) => {
@@ -975,6 +981,9 @@ async function startWorker() {
     });
 
     workerProcess.on('message', (message) => {
+      // Update activity timestamp on any message
+      lastWorkerActivity = Date.now();
+      
       if (message.type === 'stats') {
         stats = { ...stats, ...message.data };
         sendStatusToRenderer();
@@ -1018,6 +1027,10 @@ async function startWorker() {
 
     stats.status = 'Running';
     isOnline = true;
+    lastWorkerActivity = Date.now();
+    
+    // Start watchdog to detect unresponsive worker
+    startWatchdog();
     
     // Update server with online status
     try {
@@ -1057,10 +1070,55 @@ function parseWorkerOutput(message) {
   updateTrayMenu();
 }
 
+// Watchdog: detect unresponsive worker
+function startWatchdog() {
+  stopWatchdog(); // Clear any existing watchdog
+  
+  watchdogInterval = setInterval(() => {
+    if (!isWorkerRunning || manualStop) {
+      return; // Don't check if worker is not running or manually stopped
+    }
+    
+    const timeSinceActivity = Date.now() - lastWorkerActivity;
+    
+    if (timeSinceActivity > WATCHDOG_TIMEOUT_MS) {
+      log(`Watchdog: Worker unresponsive for ${Math.round(timeSinceActivity / 1000)}s, restarting...`);
+      logError(`Worker unresponsive, forcing restart`);
+      
+      // Kill the worker and let the close handler restart it
+      if (workerProcess) {
+        workerProcess.kill('SIGKILL');
+        workerProcess = null;
+      }
+      isWorkerRunning = false;
+      stats.status = 'Restarting (unresponsive)...';
+      sendStatusToRenderer();
+      
+      // Restart after a short delay
+      setTimeout(() => {
+        if (!isWorkerRunning && config.apiKey && !manualStop) {
+          startWorker();
+        }
+      }, 3000);
+    }
+  }, WATCHDOG_CHECK_INTERVAL_MS);
+  
+  log('Watchdog started');
+}
+
+function stopWatchdog() {
+  if (watchdogInterval) {
+    clearInterval(watchdogInterval);
+    watchdogInterval = null;
+    log('Watchdog stopped');
+  }
+}
+
 // Stop the worker
 async function stopWorker() {
   log('Stopping worker...');
   manualStop = true; // Prevent auto-restart
+  stopWatchdog(); // Stop watchdog when worker stops
   
   if (workerProcess) {
     workerProcess.kill();
