@@ -114,6 +114,7 @@ let setupPhase = null; // null, 'downloading-ollama', 'downloading-model', 'star
 let setupProgress = 0;
 let lastError = null;
 let isOnline = false;
+let manualStop = false; // Track if worker was manually stopped (vs crashed)
 
 // Logging functions
 function log(message) {
@@ -860,6 +861,7 @@ async function startWorker() {
     return;
   }
   
+  manualStop = false; // Allow auto-restart on crash
   lastError = null;
   
   if (!config.apiKey) {
@@ -940,13 +942,20 @@ async function startWorker() {
     log(`Worker script path: ${workerScript}`);
     const appSignature = generateAppSignature();
     
+    // Log directory for worker debug logs
+    const logDir = path.join(app.getPath('userData'), 'logs');
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    
     workerProcess = spawn(process.execPath, [workerScript], {
       env: {
         ...process.env,
         CG_API_KEY: config.apiKey,
         CG_SERVER_URL: SERVER_URL,
         CG_APP_VERSION: APP_VERSION,
-        CG_APP_SIGNATURE: appSignature
+        CG_APP_SIGNATURE: appSignature,
+        CG_LOG_DIR: logDir
       },
       stdio: ['pipe', 'pipe', 'pipe', 'ipc']
     });
@@ -982,6 +991,17 @@ async function startWorker() {
       stats.status = code === 0 ? 'Stopped' : 'Crashed';
       if (code !== 0 && code !== null) {
         logError(`Worker crashed with exit code ${code}`);
+        // Auto-restart after crash (unless manually stopped)
+        if (config.apiKey && !manualStop) {
+          log('Auto-restarting worker in 5 seconds...');
+          stats.status = 'Restarting...';
+          sendStatusToRenderer();
+          setTimeout(() => {
+            if (!isWorkerRunning && config.apiKey) {
+              startWorker();
+            }
+          }, 5000);
+        }
       }
       sendStatusToRenderer();
       updateTrayMenu();
@@ -1040,6 +1060,7 @@ function parseWorkerOutput(message) {
 // Stop the worker
 async function stopWorker() {
   log('Stopping worker...');
+  manualStop = true; // Prevent auto-restart
   
   if (workerProcess) {
     workerProcess.kill();
@@ -1254,6 +1275,34 @@ ipcMain.handle('window-maximize', () => {
 
 ipcMain.handle('window-close', () => {
   if (mainWindow) mainWindow.close();
+});
+
+// Get worker logs
+ipcMain.handle('get-logs', async () => {
+  try {
+    const logDir = path.join(app.getPath('userData'), 'logs');
+    const logFile = path.join(logDir, 'computegrid-worker.log');
+    
+    if (fs.existsSync(logFile)) {
+      const content = fs.readFileSync(logFile, 'utf8');
+      // Return last 100 lines
+      const lines = content.split('\n');
+      const lastLines = lines.slice(-100).join('\n');
+      return { success: true, logs: lastLines, path: logFile };
+    }
+    return { success: true, logs: 'No logs yet.', path: logFile };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// Open logs folder
+ipcMain.handle('open-logs-folder', () => {
+  const logDir = path.join(app.getPath('userData'), 'logs');
+  if (!fs.existsSync(logDir)) {
+    fs.mkdirSync(logDir, { recursive: true });
+  }
+  shell.openPath(logDir);
 });
 
 // Auto-updater setup
