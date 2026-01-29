@@ -123,7 +123,8 @@ function createWindow() {
     minWidth: 420,
     minHeight: 600,
     resizable: true,
-    frame: true,
+    frame: false,
+    titleBarStyle: 'hidden',
     show: !config.startMinimized,
     webPreferences: {
       nodeIntegration: false,
@@ -131,6 +132,11 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js')
     }
   });
+
+  // Remove the menu bar completely
+  mainWindow.setMenuBarVisibility(false);
+  mainWindow.setMenu(null);
+  Menu.setApplicationMenu(null);
 
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
 
@@ -378,32 +384,68 @@ async function startOllamaService() {
   });
 }
 
-// Download file with progress
+// Download file with progress (follows redirects properly)
 function downloadFile(url, destPath, progressCallback) {
   return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(destPath);
+    let lastReportedProgress = -1;
     
-    const makeRequest = (requestUrl) => {
-      https.get(requestUrl, (response) => {
+    const makeRequest = (requestUrl, redirectCount = 0) => {
+      if (redirectCount > 10) {
+        reject(new Error('Too many redirects'));
+        return;
+      }
+      
+      const protocol = requestUrl.startsWith('https') ? https : http;
+      
+      protocol.get(requestUrl, (response) => {
+        // Handle redirects
         if (response.statusCode === 302 || response.statusCode === 301) {
-          makeRequest(response.headers.location);
+          const redirectUrl = response.headers.location;
+          if (redirectUrl) {
+            makeRequest(redirectUrl, redirectCount + 1);
+          } else {
+            reject(new Error('Redirect with no location'));
+          }
           return;
         }
         
+        if (response.statusCode !== 200) {
+          reject(new Error(`HTTP ${response.statusCode}`));
+          return;
+        }
+        
+        const file = fs.createWriteStream(destPath);
         const totalBytes = parseInt(response.headers['content-length'], 10);
         let downloadedBytes = 0;
         
         response.on('data', (chunk) => {
           downloadedBytes += chunk.length;
-          const progress = Math.round((downloadedBytes / totalBytes) * 100);
-          if (progressCallback) progressCallback(progress);
+          if (totalBytes && totalBytes > 0) {
+            // Only report progress if it increased (prevents jumping around)
+            const progress = Math.min(99, Math.round((downloadedBytes / totalBytes) * 100));
+            if (progress > lastReportedProgress) {
+              lastReportedProgress = progress;
+              if (progressCallback) progressCallback(progress);
+            }
+          }
         });
         
         response.pipe(file);
         
         file.on('finish', () => {
           file.close();
+          if (progressCallback) progressCallback(100);
           resolve(destPath);
+        });
+        
+        file.on('error', (err) => {
+          fs.unlink(destPath, () => {});
+          reject(err);
+        });
+        
+        response.on('error', (err) => {
+          fs.unlink(destPath, () => {});
+          reject(err);
         });
       }).on('error', (err) => {
         fs.unlink(destPath, () => {});
@@ -774,6 +816,36 @@ async function uninstallApp() {
   });
 }
 
+// IPC handlers for window controls (frameless window)
+ipcMain.handle('window-minimize', () => {
+  if (mainWindow) mainWindow.minimize();
+});
+
+ipcMain.handle('window-maximize', () => {
+  if (mainWindow) {
+    if (mainWindow.isMaximized()) {
+      mainWindow.unmaximize();
+    } else {
+      mainWindow.maximize();
+    }
+  }
+});
+
+ipcMain.handle('window-close', () => {
+  if (mainWindow) {
+    if (config.minimizeToTray && isWorkerRunning) {
+      mainWindow.hide();
+      showNotification('ComputeGrid Worker', 'Worker is still running in the background');
+    } else {
+      mainWindow.close();
+    }
+  }
+});
+
+ipcMain.handle('window-is-maximized', () => {
+  return mainWindow ? mainWindow.isMaximized() : false;
+});
+
 // IPC handlers
 ipcMain.handle('get-status', () => {
   return {
@@ -942,7 +1014,10 @@ async function setupOllamaOnStartup() {
   sendStatusToRenderer();
 }
 
-// Setup auto-updater
+// Setup auto-updater with silent background installation
+let pendingUpdateVersion = null;
+let updateCheckInterval = null;
+
 function setupAutoUpdater() {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
@@ -960,7 +1035,6 @@ function setupAutoUpdater() {
 
   autoUpdater.on('update-available', (info) => {
     console.log('Update available:', info.version);
-    showNotification('Update Available', `Version ${info.version} is downloading...`);
     if (mainWindow) {
       mainWindow.webContents.send('update-status', { status: 'downloading', version: info.version });
     }
@@ -982,23 +1056,14 @@ function setupAutoUpdater() {
 
   autoUpdater.on('update-downloaded', (info) => {
     console.log('Update downloaded:', info.version);
-    showNotification('Update Ready', `Version ${info.version} will install on restart`);
+    pendingUpdateVersion = info.version;
+    
     if (mainWindow) {
       mainWindow.webContents.send('update-status', { status: 'ready', version: info.version });
     }
     
-    if (!isWorkerRunning) {
-      dialog.showMessageBox(mainWindow, {
-        type: 'info',
-        title: 'Update Ready',
-        message: `Version ${info.version} has been downloaded. Restart now to install?`,
-        buttons: ['Restart Now', 'Later']
-      }).then((result) => {
-        if (result.response === 0) {
-          autoUpdater.quitAndInstall();
-        }
-      });
-    }
+    // Silent auto-install: install when worker is idle
+    attemptSilentInstall(info.version);
   });
 
   autoUpdater.on('error', (err) => {
@@ -1008,13 +1073,46 @@ function setupAutoUpdater() {
     }
   });
 
+  // Initial check
   autoUpdater.checkForUpdates().catch(err => {
     console.log('Update check failed (may be in development):', err.message);
   });
 
-  setInterval(() => {
+  // Check for updates hourly
+  updateCheckInterval = setInterval(() => {
     autoUpdater.checkForUpdates().catch(() => {});
   }, 60 * 60 * 1000);
+}
+
+// Attempt to silently install update when worker is idle
+function attemptSilentInstall(version) {
+  // If worker is not running, install immediately (silently)
+  if (!isWorkerRunning) {
+    console.log('Worker idle - installing update silently...');
+    showNotification('Updating', `Installing v${version}...`);
+    
+    // Small delay to show notification, then install
+    setTimeout(() => {
+      autoUpdater.quitAndInstall(true, true); // silent, force quit
+    }, 2000);
+    return;
+  }
+  
+  // Worker is running - check periodically for idle state
+  console.log('Worker running - waiting for idle state to install update...');
+  showNotification('Update Ready', `v${version} will install when worker is idle`);
+  
+  const idleCheckInterval = setInterval(() => {
+    if (!isWorkerRunning) {
+      clearInterval(idleCheckInterval);
+      console.log('Worker now idle - installing update...');
+      showNotification('Updating', `Installing v${version}...`);
+      
+      setTimeout(() => {
+        autoUpdater.quitAndInstall(true, true);
+      }, 2000);
+    }
+  }, 30000); // Check every 30 seconds
 }
 
 // App lifecycle
