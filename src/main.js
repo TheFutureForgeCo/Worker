@@ -60,8 +60,7 @@ let config = {
   apiKey: '',
   autoStart: false,
   minimizeToTray: true,
-  startMinimized: false,
-  selectedModel: 'mistral'
+  startMinimized: false
 };
 let stats = {
   tasksCompleted: 0,
@@ -194,7 +193,7 @@ function updateTrayMenu() {
       enabled: false
     },
     {
-      label: `Earnings: $${stats.earnings}`,
+      label: `Tokens: ${stats.earnings}`,
       enabled: false
     },
     {
@@ -245,7 +244,7 @@ function updateTrayMenu() {
   ]);
 
   tray.setContextMenu(contextMenu);
-  tray.setToolTip(`ComputeGrid Worker - ${stats.status} | $${stats.earnings}`);
+  tray.setToolTip(`ComputeGrid Worker - ${stats.status} | ${stats.earnings} tokens`);
 }
 
 // Show notification
@@ -266,8 +265,7 @@ function sendStatusToRenderer() {
         serverUrl: SERVER_URL,
         autoStart: config.autoStart,
         minimizeToTray: config.minimizeToTray,
-        startMinimized: config.startMinimized,
-        selectedModel: config.selectedModel
+        startMinimized: config.startMinimized
       },
       ollamaDownloadProgress
     });
@@ -582,8 +580,7 @@ async function startWorker() {
       CG_API_KEY: config.apiKey,
       CG_SERVER_URL: SERVER_URL,
       CG_APP_VERSION: APP_VERSION,
-      CG_APP_SIGNATURE: appSignature,
-      CG_SELECTED_MODEL: config.selectedModel
+      CG_APP_SIGNATURE: appSignature
     },
     stdio: ['pipe', 'pipe', 'pipe', 'ipc']
   });
@@ -715,8 +712,7 @@ ipcMain.handle('get-status', () => {
       serverUrl: SERVER_URL,
       autoStart: config.autoStart,
       minimizeToTray: config.minimizeToTray,
-      startMinimized: config.startMinimized,
-      selectedModel: config.selectedModel
+      startMinimized: config.startMinimized
     },
     ollamaDownloadProgress
   };
@@ -818,10 +814,73 @@ function setupAutoStart() {
   });
 }
 
+// Auto-setup Ollama on startup
+async function setupOllamaOnStartup() {
+  stats.ollamaStatus = 'checking...';
+  sendStatusToRenderer();
+  
+  const installed = await checkOllama();
+  
+  if (!installed) {
+    // Auto-install Ollama
+    stats.ollamaStatus = 'downloading AI...';
+    sendStatusToRenderer();
+    
+    try {
+      await installOllama();
+    } catch (err) {
+      console.error('Ollama auto-install failed:', err);
+      stats.ollamaStatus = 'install failed';
+      sendStatusToRenderer();
+      return;
+    }
+  }
+  
+  // Start Ollama service
+  const running = await checkOllamaRunning();
+  if (!running) {
+    stats.ollamaStatus = 'starting AI service...';
+    sendStatusToRenderer();
+    await startOllamaService();
+  }
+  
+  // Get available models
+  const models = await getOllamaModels();
+  
+  // If no models installed, pull default model
+  if (!models || models.length === 0) {
+    stats.ollamaStatus = 'downloading AI model...';
+    sendStatusToRenderer();
+    
+    // Pick model based on RAM: TinyLlama for <8GB, Mistral for 8GB+
+    const totalMemory = os.totalmem() / (1024 * 1024 * 1024); // GB
+    const defaultModel = totalMemory < 8 ? 'tinyllama' : 'mistral';
+    
+    try {
+      await pullModel(defaultModel);
+      stats.ollamaStatus = `${defaultModel} ready`;
+    } catch (err) {
+      console.error('Model pull failed:', err);
+      stats.ollamaStatus = 'model download failed';
+    }
+  } else {
+    stats.ollamaStatus = 'ready';
+  }
+  
+  sendStatusToRenderer();
+}
+
 // Setup auto-updater
 function setupAutoUpdater() {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
+  
+  // Set GitHub as the update provider
+  autoUpdater.setFeedURL({
+    provider: 'github',
+    owner: 'TheFutureForgeCo',
+    repo: 'Worker'
+  });
 
   autoUpdater.on('checking-for-update', () => {
     console.log('Checking for updates...');
@@ -898,17 +957,8 @@ app.whenReady().then(() => {
   console.log(`App signature: ${generateAppSignature()}`);
   console.log(`Server URL: ${SERVER_URL}`);
 
-  // Check Ollama on startup
-  checkOllama().then(installed => {
-    if (installed) {
-      checkOllamaRunning().then(running => {
-        if (!running) {
-          startOllamaService();
-        }
-        getOllamaModels();
-      });
-    }
-  });
+  // Auto-setup Ollama on startup - install and pull models automatically
+  setupOllamaOnStartup();
 
   if (config.autoStart && config.apiKey) {
     startWorker();
