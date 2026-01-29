@@ -1,0 +1,60 @@
+{
+  "name": "computegrid-worker",
+  "version": "1.0.0",
+  "description": "ComputeGrid Worker Desktop App - Earn money by sharing your computing power",
+  "main": "src/main.js",
+  "homepage": "https://computegrid.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/computegrid/worker-app.git"
+  },
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win",
+    "build:linux": "electron-builder --linux"
+  },
+  "author": {
+    "name": "ComputeGrid",
+    "email": "support@computegrid.app"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "electron-updater": "^6.1.7"
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.computegrid.worker",
+    "productName": "ComputeGrid Worker",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*"
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "computegrid",
+      "repo": "worker-app"
+    },
+    "win": {
+      "target": ["nsis", "portable"],
+      "publisherName": "ComputeGrid"
+    },
+    "linux": {
+      "target": ["AppImage"],
+      "category": "Utility"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}
