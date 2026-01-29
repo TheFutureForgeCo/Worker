@@ -307,11 +307,31 @@ async function pollForTasks() {
   try {
     const response = await makeRequest(`${SERVER_URL}/api/worker/poll`, { timeout: 15000 });
     
-    if (response.status === 200 && response.data && response.data.task) {
-      connectionFailed = false;
+    // Log non-200 responses for debugging
+    if (response.status !== 200) {
+      const msg = response.data?.message || `Status ${response.status}`;
+      if (!connectionFailed) {
+        log(`Poll response: ${response.status} - ${msg}`);
+        if (response.status === 400 || response.status === 401) {
+          sendError(msg);
+        }
+        connectionFailed = true;
+        lastError = msg;
+      }
+      return null;
+    }
+    
+    connectionFailed = false;
+    
+    // Check for tasks array (new format) or single task
+    if (response.data && response.data.tasks && response.data.tasks.length > 0) {
+      return response.data.tasks[0];
+    }
+    if (response.data && response.data.task) {
       return response.data.task;
     }
-    connectionFailed = false;
+    
+    return null;
   } catch (err) {
     if (!connectionFailed) {
       log(`Poll error: ${err.message}`);
@@ -431,11 +451,35 @@ async function testConnection() {
   log(`Testing connection to ${SERVER_URL}...`);
   try {
     const response = await makeRequest(`${SERVER_URL}/api/worker/poll`, { timeout: 15000 });
-    if (response.status === 200 || response.status === 401) {
+    
+    // Log the full response for debugging
+    log(`Connection test response: status=${response.status}, body=${JSON.stringify(response.data)}`);
+    
+    if (response.status === 200) {
       log('Connection to server successful');
       return true;
     }
+    
+    // 400 "Worker must be online" means the set-online call failed - NOT a success
+    if (response.status === 400) {
+      const msg = response.data?.message || 'Bad request';
+      log(`Server rejected request (400): ${msg}`);
+      lastError = msg;
+      sendError(msg);
+      return false;
+    }
+    
+    // 401 means API key issue
+    if (response.status === 401) {
+      const msg = response.data?.message || 'Unauthorized';
+      log(`Authentication failed (401): ${msg}`);
+      lastError = msg;
+      sendError(msg);
+      return false;
+    }
+    
     log(`Server responded with status: ${response.status}`);
+    lastError = `Server error: ${response.status}`;
     return response.status < 500;
   } catch (err) {
     log(`Connection test failed: ${err.message}`);
