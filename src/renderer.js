@@ -23,21 +23,12 @@ const startMinimizedToggle = document.getElementById('startMinimizedToggle');
 const startMinimizedSwitch = document.getElementById('startMinimizedSwitch');
 const minimizeToTrayToggle = document.getElementById('minimizeToTrayToggle');
 const minimizeToTraySwitch = document.getElementById('minimizeToTraySwitch');
-const manageModelsBtn = document.getElementById('manageModelsBtn');
-const modelCount = document.getElementById('modelCount');
 const checkUpdatesBtn = document.getElementById('checkUpdatesBtn');
 const updateStatus = document.getElementById('updateStatus');
 const clearDataBtn = document.getElementById('clearDataBtn');
 const aboutBtn = document.getElementById('aboutBtn');
 const uninstallBtn = document.getElementById('uninstallBtn');
 const backBtn = document.getElementById('backBtn');
-
-// DOM Elements - Models Page
-const preferredModel = document.getElementById('preferredModel');
-const modelList = document.getElementById('modelList');
-const newModelName = document.getElementById('newModelName');
-const pullModelBtn = document.getElementById('pullModelBtn');
-const modelsBackBtn = document.getElementById('modelsBackBtn');
 
 // DOM Elements - About Page
 const aboutBackBtn = document.getElementById('aboutBackBtn');
@@ -46,17 +37,16 @@ const openGithubBtn = document.getElementById('openGithubBtn');
 // Pages
 const mainPage = document.getElementById('mainPage');
 const settingsPage = document.getElementById('settingsPage');
-const modelsPage = document.getElementById('modelsPage');
 const aboutPage = document.getElementById('aboutPage');
 
 let isRunning = false;
 let currentConfig = {};
 let serverUrl = '';
 
-// Format earnings nicely
+// Format earnings as tokens
 function formatEarnings(amount) {
   const num = parseFloat(amount) || 0;
-  return `$${num.toFixed(2)}`;
+  return num.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
 
 // Format task count
@@ -79,10 +69,11 @@ function formatBytes(bytes) {
 
 // Navigate between pages
 function showPage(pageId) {
-  [mainPage, settingsPage, modelsPage, aboutPage].forEach(page => {
-    page.classList.remove('active');
+  [mainPage, settingsPage, aboutPage].forEach(page => {
+    if (page) page.classList.remove('active');
   });
-  document.getElementById(pageId).classList.add('active');
+  const targetPage = document.getElementById(pageId);
+  if (targetPage) targetPage.classList.add('active');
   
   // Update settings icon state
   settingsBtn.classList.toggle('active', pageId === 'settingsPage');
@@ -109,9 +100,6 @@ async function init() {
       versionBadge.textContent = `v${version}`;
     }
   }
-  
-  // Load models
-  loadModels();
 }
 
 // Update UI with status
@@ -145,26 +133,12 @@ function updateUI(status) {
   autoStartSwitch.classList.toggle('active', currentConfig.autoStart);
   startMinimizedSwitch.classList.toggle('active', currentConfig.startMinimized);
   minimizeToTraySwitch.classList.toggle('active', currentConfig.minimizeToTray);
-  
-  // Update preferred model
-  if (preferredModel && currentConfig.selectedModel) {
-    preferredModel.value = currentConfig.selectedModel;
-  }
-  
-  // Update model count
-  if (status.stats.ollamaModels) {
-    const count = status.stats.ollamaModels.length;
-    modelCount.textContent = `${count} model${count !== 1 ? 's' : ''} installed`;
-  }
 }
 
 // Check Ollama status
 async function checkOllamaStatus() {
   const installed = await window.electronAPI.checkOllama();
   updateOllamaUI(installed ? 'installed' : 'not installed', 0);
-  if (installed) {
-    loadModels();
-  }
 }
 
 // Update Ollama UI
@@ -208,40 +182,6 @@ function updateDashboardLink() {
   };
 }
 
-// Load installed models
-async function loadModels() {
-  const models = await window.electronAPI.getOllamaModels();
-  
-  if (models && models.length > 0) {
-    modelList.innerHTML = models.map(model => `
-      <div class="model-item">
-        <div class="model-item-info">
-          <div class="model-item-name">${model.name}</div>
-          <div class="model-item-size">${formatBytes(model.size)}</div>
-        </div>
-        <button class="btn btn-secondary btn-icon" onclick="deleteModel('${model.name}')" title="Delete">&#128465;</button>
-      </div>
-    `).join('');
-    
-    modelCount.textContent = `${models.length} model${models.length !== 1 ? 's' : ''} installed`;
-  } else {
-    modelList.innerHTML = '<div class="input-hint">No models installed yet. Download one below.</div>';
-    modelCount.textContent = '0 models installed';
-  }
-}
-
-// Delete model
-window.deleteModel = async function(modelName) {
-  if (confirm(`Delete ${modelName}?`)) {
-    try {
-      await window.electronAPI.deleteModel(modelName);
-      loadModels();
-    } catch (err) {
-      alert('Failed to delete model: ' + err.message);
-    }
-  }
-};
-
 // Load app info for About page
 async function loadAboutInfo() {
   const info = await window.electronAPI.getAppInfo();
@@ -262,8 +202,7 @@ saveBtn.addEventListener('click', async () => {
     apiKey: apiKey.value || currentConfig.apiKey?.replace(/\*/g, ''),
     autoStart: currentConfig.autoStart,
     minimizeToTray: currentConfig.minimizeToTray,
-    startMinimized: currentConfig.startMinimized,
-    selectedModel: preferredModel?.value || 'mistral'
+    startMinimized: currentConfig.startMinimized
   });
   
   saveBtn.textContent = 'Saved!';
@@ -285,8 +224,7 @@ startBtn.addEventListener('click', async () => {
         apiKey: apiKey.value,
         autoStart: currentConfig.autoStart,
         minimizeToTray: currentConfig.minimizeToTray,
-        startMinimized: currentConfig.startMinimized,
-        selectedModel: preferredModel?.value || 'mistral'
+        startMinimized: currentConfig.startMinimized
       });
     }
     await window.electronAPI.startWorker();
@@ -312,10 +250,6 @@ settingsBtn.addEventListener('click', () => {
 
 backBtn.addEventListener('click', () => {
   showPage('mainPage');
-});
-
-modelsBackBtn.addEventListener('click', () => {
-  showPage('settingsPage');
 });
 
 aboutBackBtn.addEventListener('click', () => {
@@ -354,11 +288,6 @@ minimizeToTrayToggle.addEventListener('click', async () => {
 });
 
 // Settings actions
-manageModelsBtn.addEventListener('click', () => {
-  loadModels();
-  showPage('modelsPage');
-});
-
 checkUpdatesBtn.addEventListener('click', async () => {
   updateStatus.textContent = 'Checking...';
   const result = await window.electronAPI.checkForUpdates();
@@ -388,37 +317,6 @@ uninstallBtn.addEventListener('click', async () => {
   }
 });
 
-// Models page
-preferredModel.addEventListener('change', async () => {
-  await window.electronAPI.saveConfig({
-    ...currentConfig,
-    selectedModel: preferredModel.value
-  });
-  currentConfig.selectedModel = preferredModel.value;
-});
-
-pullModelBtn.addEventListener('click', async () => {
-  const modelName = newModelName.value.trim();
-  if (!modelName) {
-    alert('Please enter a model name');
-    return;
-  }
-  
-  pullModelBtn.disabled = true;
-  pullModelBtn.textContent = 'Downloading...';
-  
-  try {
-    await window.electronAPI.pullModel(modelName);
-    newModelName.value = '';
-    loadModels();
-  } catch (err) {
-    alert('Failed to download model: ' + err.message);
-  }
-  
-  pullModelBtn.disabled = false;
-  pullModelBtn.textContent = 'Download Model';
-});
-
 // About page
 openGithubBtn.addEventListener('click', () => {
   window.electronAPI.openExternal('https://github.com/TheFutureForgeCo/Worker');
@@ -433,8 +331,6 @@ window.electronAPI.onStatusUpdate((status) => {
 window.electronAPI.onNavigate((page) => {
   if (page === 'settings') {
     showPage('settingsPage');
-  } else if (page === 'models') {
-    showPage('modelsPage');
   } else if (page === 'about') {
     showPage('aboutPage');
   } else {
