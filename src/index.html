@@ -708,8 +708,8 @@
         </div>
         <div class="stats-grid">
           <div class="stat-item">
-            <div class="stat-value" id="earnings">$0.00</div>
-            <div class="stat-label">Earnings</div>
+            <div class="stat-value" id="earnings">0</div>
+            <div class="stat-label">Tokens Earned</div>
           </div>
           <div class="stat-item">
             <div class="stat-value" id="tasksCompleted">0</div>
@@ -785,18 +785,6 @@
       </div>
 
       <div class="settings-group">
-        <div class="settings-group-title">AI Models</div>
-        <div class="settings-item" id="manageModelsBtn">
-          <div class="settings-item-icon">&#129302;</div>
-          <div class="settings-item-content">
-            <div class="settings-item-title">Manage AI models</div>
-            <div class="settings-item-subtitle" id="modelCount">0 models installed</div>
-          </div>
-          <div class="settings-item-action">&rsaquo;</div>
-        </div>
-      </div>
-
-      <div class="settings-group">
         <div class="settings-group-title">App</div>
         <div class="settings-item" id="checkUpdatesBtn">
           <div class="settings-item-icon">&#8635;</div>
@@ -832,42 +820,6 @@
             <div class="settings-item-subtitle">Remove ComputeGrid Worker</div>
           </div>
           <div class="settings-item-action">&rsaquo;</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Models Page -->
-  <div class="page" id="modelsPage">
-    <div class="content">
-      <button class="back-btn" id="modelsBackBtn">&larr; Back</button>
-      <div class="page-title">AI Models</div>
-
-      <div class="config-section">
-        <div class="section-title">Preferred Model</div>
-        <select class="model-select" id="preferredModel">
-          <option value="mistral">Mistral 7B (Recommended)</option>
-          <option value="llama2">Llama 2 7B</option>
-          <option value="tinyllama">TinyLlama (Low RAM)</option>
-          <option value="phi">Phi-2 (Fast)</option>
-        </select>
-        <div class="input-hint" style="margin-top: 8px;">Used for processing AI tasks</div>
-      </div>
-
-      <div class="config-section">
-        <div class="section-title">Installed Models</div>
-        <div class="model-list" id="modelList">
-          <div class="input-hint">No models installed yet</div>
-        </div>
-      </div>
-
-      <div class="config-section">
-        <div class="section-title">Download Model</div>
-        <div class="input-group" style="margin-bottom: 0;">
-          <input type="text" class="input-field" id="newModelName" placeholder="e.g., mistral, llama2, tinyllama">
-        </div>
-        <div class="actions" style="margin-top: 12px;">
-          <button class="btn btn-primary" id="pullModelBtn">Download Model</button>
         </div>
       </div>
     </div>
