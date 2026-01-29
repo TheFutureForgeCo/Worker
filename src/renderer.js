@@ -61,10 +61,19 @@ const backBtn = document.getElementById('backBtn');
 const aboutBackBtn = document.getElementById('aboutBackBtn');
 const openGithubBtn = document.getElementById('openGithubBtn');
 
+// DOM Elements - Logs Page
+const viewLogsBtn = document.getElementById('viewLogsBtn');
+const logsBackBtn = document.getElementById('logsBackBtn');
+const refreshLogsBtn = document.getElementById('refreshLogsBtn');
+const openLogsFolderBtn = document.getElementById('openLogsFolderBtn');
+const logsContent = document.getElementById('logsContent');
+const logsPath = document.getElementById('logsPath');
+
 // Pages
 const mainPage = document.getElementById('mainPage');
 const settingsPage = document.getElementById('settingsPage');
 const aboutPage = document.getElementById('aboutPage');
+const logsPage = document.getElementById('logsPage');
 
 let isOnline = false;
 let currentConfig = {};
@@ -84,7 +93,7 @@ function formatTasks(count) {
 
 // Navigate between pages
 function showPage(pageId) {
-  [mainPage, settingsPage, aboutPage].forEach(page => {
+  [mainPage, settingsPage, aboutPage, logsPage].forEach(page => {
     if (page) page.classList.remove('active');
   });
   const targetPage = document.getElementById(pageId);
@@ -92,6 +101,11 @@ function showPage(pageId) {
   
   // Update settings icon state
   settingsBtn.classList.toggle('active', pageId === 'settingsPage');
+  
+  // Load logs when showing logs page
+  if (pageId === 'logsPage') {
+    loadLogs();
+  }
 }
 
 // Show/hide setup overlay
@@ -401,6 +415,49 @@ uninstallBtn.addEventListener('click', async () => {
 openGithubBtn.addEventListener('click', () => {
   window.electronAPI.openExternal('https://github.com/TheFutureForgeCo/Worker');
 });
+
+// Logs page
+async function loadLogs() {
+  if (logsContent) {
+    logsContent.textContent = 'Loading logs...';
+  }
+  try {
+    const result = await window.electronAPI.getLogs();
+    if (result.success) {
+      if (logsContent) logsContent.textContent = result.logs || 'No logs yet.';
+      if (logsPath) logsPath.textContent = result.path || '-';
+      // Scroll to bottom
+      const container = document.querySelector('.logs-container');
+      if (container) container.scrollTop = container.scrollHeight;
+    } else {
+      if (logsContent) logsContent.textContent = 'Error loading logs: ' + (result.error || 'Unknown');
+    }
+  } catch (err) {
+    if (logsContent) logsContent.textContent = 'Failed to load logs: ' + err.message;
+  }
+}
+
+if (viewLogsBtn) {
+  viewLogsBtn.addEventListener('click', () => {
+    showPage('logsPage');
+  });
+}
+
+if (logsBackBtn) {
+  logsBackBtn.addEventListener('click', () => {
+    showPage('settingsPage');
+  });
+}
+
+if (refreshLogsBtn) {
+  refreshLogsBtn.addEventListener('click', loadLogs);
+}
+
+if (openLogsFolderBtn) {
+  openLogsFolderBtn.addEventListener('click', () => {
+    window.electronAPI.openLogsFolder();
+  });
+}
 
 // Listen for status updates from main process
 window.electronAPI.onStatusUpdate((status) => {
