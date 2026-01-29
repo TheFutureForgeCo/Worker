@@ -949,6 +949,14 @@
           </div>
           <div class="settings-item-action">&rsaquo;</div>
         </div>
+        <div class="settings-item" id="viewLogsBtn">
+          <div class="settings-item-icon">&#128196;</div>
+          <div class="settings-item-content">
+            <div class="settings-item-title">View Logs</div>
+            <div class="settings-item-subtitle">Debug information and errors</div>
+          </div>
+          <div class="settings-item-action">&rsaquo;</div>
+        </div>
         <div class="settings-item" id="clearDataBtn">
           <div class="settings-item-icon">&#128465;</div>
           <div class="settings-item-content">
@@ -1018,6 +1026,31 @@
       <button class="btn btn-secondary" id="openGithubBtn" style="margin-top: 16px;">
         View on GitHub
       </button>
+    </div>
+  </div>
+
+  <!-- Logs Page -->
+  <div class="page" id="logsPage">
+    <div class="content">
+      <button class="back-btn" id="logsBackBtn">&larr; Back</button>
+      <div class="page-title">Debug Logs</div>
+      
+      <div class="settings-group">
+        <div class="logs-actions" style="display: flex; gap: 8px; margin-bottom: 12px;">
+          <button class="btn btn-secondary" id="refreshLogsBtn" style="flex: 1;">
+            &#8635; Refresh
+          </button>
+          <button class="btn btn-secondary" id="openLogsFolderBtn" style="flex: 1;">
+            &#128194; Open Folder
+          </button>
+        </div>
+        <div class="logs-container" style="background: #1a1a2e; border-radius: 8px; padding: 12px; max-height: 400px; overflow-y: auto;">
+          <pre id="logsContent" style="margin: 0; font-family: 'Consolas', 'Monaco', monospace; font-size: 11px; color: #a0a0a0; white-space: pre-wrap; word-break: break-all;">Loading logs...</pre>
+        </div>
+        <div class="logs-path" style="margin-top: 8px; font-size: 11px; color: #666;">
+          <span id="logsPath">-</span>
+        </div>
+      </div>
     </div>
   </div>
 
