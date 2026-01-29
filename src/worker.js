@@ -15,6 +15,14 @@ const os = require('os');
 const LOG_DIR = process.env.CG_LOG_DIR || os.tmpdir();
 const LOG_FILE = path.join(LOG_DIR, 'computegrid-worker.log');
 
+// Initialize logging immediately
+try {
+  const initMessage = `\n${'='.repeat(50)}\n[${new Date().toISOString()}] Worker process starting...\nLog file: ${LOG_FILE}\n${'='.repeat(50)}\n`;
+  fs.appendFileSync(LOG_FILE, initMessage);
+} catch (e) {
+  console.error('Failed to initialize log file:', e.message);
+}
+
 // Ensure we catch all unhandled errors
 process.on('uncaughtException', (err) => {
   logToFile(`UNCAUGHT EXCEPTION: ${err.message}\n${err.stack}`);
