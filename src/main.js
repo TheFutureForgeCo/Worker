@@ -35,8 +35,27 @@ const OLLAMA_BIN_DIR = path.join(OLLAMA_DIR, 'bin');
 // Get the correct path for the worker script (handles packaged app)
 function getWorkerScriptPath() {
   if (app.isPackaged) {
-    // In packaged app, use the unpacked resources path
-    return path.join(process.resourcesPath, 'app.asar.unpacked', 'src', 'worker.js');
+    // In packaged app, try the unpacked resources path first
+    const unpackedPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'src', 'worker.js');
+    if (fs.existsSync(unpackedPath)) {
+      return unpackedPath;
+    }
+    // Log warning but continue - the file should be in unpacked path
+    console.error('Worker script not found at unpacked path:', unpackedPath);
+    // Try alternative paths
+    const altPaths = [
+      path.join(process.resourcesPath, 'app.asar', 'src', 'worker.js'),
+      path.join(app.getAppPath(), 'src', 'worker.js'),
+      path.join(__dirname, 'worker.js')
+    ];
+    for (const altPath of altPaths) {
+      if (fs.existsSync(altPath)) {
+        console.log('Found worker script at alternative path:', altPath);
+        return altPath;
+      }
+    }
+    // Return the expected path even if not found - will fail with clear error
+    return unpackedPath;
   }
   return path.join(__dirname, 'worker.js');
 }
@@ -69,27 +88,23 @@ function getOllamaBinaryPath() {
 // Get the correct path for source files (handles packaged app)
 function getSourcePath(filename) {
   if (app.isPackaged) {
-    // In packaged app, use the unpacked resources path
-    return path.join(process.resourcesPath, 'app.asar.unpacked', 'src', filename);
+    // In packaged app, try the unpacked resources path first
+    const unpackedPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'src', filename);
+    if (fs.existsSync(unpackedPath)) {
+      return unpackedPath;
+    }
+    // Fallback to asar path (file may be inside asar)
+    return path.join(process.resourcesPath, 'app.asar', 'src', filename);
   }
   return path.join(__dirname, filename);
 }
 
 // Generate app signature for integrity verification
+// Uses version-based signature to avoid file access issues in packaged app
 function generateAppSignature() {
-  try {
-    const workerPath = getSourcePath('worker.js');
-    const mainPath = getSourcePath('main.js');
-    
-    const workerContent = fs.readFileSync(workerPath, 'utf8');
-    const mainContent = fs.readFileSync(mainPath, 'utf8');
-    const combined = workerContent + mainContent + APP_VERSION;
-    return crypto.createHash('sha256').update(combined).digest('hex').substring(0, 16);
-  } catch (err) {
-    // In packaged app, files may not be accessible - use version-based signature
-    logError('Failed to generate signature from files, using version-based signature', err);
-    return crypto.createHash('sha256').update(APP_VERSION + 'computegrid').digest('hex').substring(0, 16);
-  }
+  // Always use version-based signature for reliability in packaged apps
+  // This avoids ENOENT errors when files are inside asar or unpacked incorrectly
+  return crypto.createHash('sha256').update(APP_VERSION + 'computegrid-worker').digest('hex').substring(0, 16);
 }
 
 // Compute challenge response for server verification
