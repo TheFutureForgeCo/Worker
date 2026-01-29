@@ -62,81 +62,41 @@
 
     .window-controls {
       display: flex;
-      gap: 6px;
+      gap: 4px;
       margin-left: 8px;
       -webkit-app-region: no-drag;
     }
 
     .window-btn {
-      width: 12px;
-      height: 12px;
-      border-radius: 50%;
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
       border: none;
       cursor: pointer;
       transition: all var(--transition);
-      position: relative;
+      background: transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
     }
 
     .window-btn:hover {
-      transform: scale(1.1);
+      background: var(--bg-elevated);
+      color: var(--text-primary);
     }
 
-    .window-btn.close {
-      background: #ff5f57;
+    .window-btn.close:hover {
+      background: var(--danger);
+      color: white;
     }
 
-    .window-btn.minimize {
-      background: #febc2e;
-    }
-
-    .window-btn.maximize {
-      background: #28c840;
-    }
-
-    .window-btn:hover::after {
-      opacity: 1;
-    }
-
-    .window-btn.close::after {
-      content: '\00d7';
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      font-size: 10px;
-      color: #4a0002;
-      opacity: 0;
-      transition: opacity var(--transition);
-      font-weight: bold;
-      line-height: 1;
-    }
-
-    .window-btn.minimize::after {
-      content: '\2212';
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      font-size: 10px;
-      color: #9a6500;
-      opacity: 0;
-      transition: opacity var(--transition);
-      font-weight: bold;
-      line-height: 1;
-    }
-
-    .window-btn.maximize::after {
-      content: '+';
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      font-size: 10px;
-      color: #006500;
-      opacity: 0;
-      transition: opacity var(--transition);
-      font-weight: bold;
-      line-height: 1;
+    .window-btn svg {
+      width: 14px;
+      height: 14px;
+      stroke: currentColor;
+      stroke-width: 2;
+      fill: none;
     }
 
     .logo-icon {
@@ -771,9 +731,15 @@
 <body>
   <div class="header">
     <div class="window-controls">
-      <button class="window-btn close" id="windowClose" title="Close"></button>
-      <button class="window-btn minimize" id="windowMinimize" title="Minimize"></button>
-      <button class="window-btn maximize" id="windowMaximize" title="Maximize"></button>
+      <button class="window-btn minimize" id="windowMinimize" title="Minimize">
+        <svg viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+      </button>
+      <button class="window-btn maximize" id="windowMaximize" title="Maximize">
+        <svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"></rect></svg>
+      </button>
+      <button class="window-btn close" id="windowClose" title="Close">
+        <svg viewBox="0 0 24 24"><line x1="6" y1="6" x2="18" y2="18"></line><line x1="6" y1="18" x2="18" y2="6"></line></svg>
+      </button>
     </div>
     <div class="logo-icon">CG</div>
     <div class="header-text">
