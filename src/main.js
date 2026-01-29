@@ -2,7 +2,7 @@ const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, shell, Notificatio
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const { spawn, exec } = require('child_process');
+const { spawn, exec, execSync } = require('child_process');
 const https = require('https');
 const http = require('http');
 const os = require('os');
@@ -10,11 +10,21 @@ const { autoUpdater } = require('electron-updater');
 
 // App version and integrity
 const APP_VERSION = require('../package.json').version;
-const INTEGRITY_CHECK_INTERVAL = 5 * 60 * 1000; // Check every 5 minutes
+const INTEGRITY_CHECK_INTERVAL = 5 * 60 * 1000;
+
+// Hardcoded server URL - users only need to enter API key
+const SERVER_URL = 'https://computegrid.replit.app';
 
 // App configuration
 const CONFIG_PATH = path.join(app.getPath('userData'), 'config.json');
 const OLLAMA_HOST = 'http://127.0.0.1:11434';
+
+// Ollama download URLs
+const OLLAMA_DOWNLOAD_URLS = {
+  win32: 'https://ollama.com/download/OllamaSetup.exe',
+  darwin: 'https://ollama.com/download/Ollama-darwin.zip',
+  linux: 'https://ollama.com/install.sh'
+};
 
 // Generate app signature for integrity verification
 function generateAppSignature() {
@@ -48,16 +58,19 @@ let workerProcess = null;
 let isWorkerRunning = false;
 let config = {
   apiKey: '',
-  serverUrl: '',
   autoStart: false,
-  minimizeToTray: true
+  minimizeToTray: true,
+  startMinimized: false,
+  selectedModel: 'mistral'
 };
 let stats = {
   tasksCompleted: 0,
   earnings: '0.00',
   status: 'stopped',
-  ollamaStatus: 'not installed'
+  ollamaStatus: 'checking...',
+  ollamaModels: []
 };
+let ollamaDownloadProgress = 0;
 
 // Load configuration
 function loadConfig() {
@@ -83,14 +96,13 @@ function saveConfig() {
 // Create the main window
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 450,
-    height: 600,
-    minWidth: 400,
-    minHeight: 500,
+    width: 480,
+    height: 700,
+    minWidth: 420,
+    minHeight: 600,
     resizable: true,
     frame: true,
-    show: false,
-    // Icon will be set during packaging by electron-builder
+    show: !config.startMinimized,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -101,7 +113,9 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
 
   mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
+    if (!config.startMinimized) {
+      mainWindow.show();
+    }
     sendStatusToRenderer();
   });
 
@@ -120,21 +134,17 @@ function createWindow() {
 
 // Create a simple tray icon programmatically
 function createTrayIcon() {
-  // Create a simple 16x16 icon
   const size = 16;
   const canvas = Buffer.alloc(size * size * 4);
   
-  // Fill with gradient-like pattern (purple to cyan)
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const idx = (y * size + x) * 4;
       const ratio = (x + y) / (size * 2);
-      
-      // RGBA: purple to cyan gradient
-      canvas[idx] = Math.floor(124 + (0 - 124) * ratio);     // R
-      canvas[idx + 1] = Math.floor(58 + (212 - 58) * ratio); // G
-      canvas[idx + 2] = Math.floor(237 + (255 - 237) * ratio); // B
-      canvas[idx + 3] = 255; // A
+      canvas[idx] = Math.floor(124 + (0 - 124) * ratio);
+      canvas[idx + 1] = Math.floor(58 + (212 - 58) * ratio);
+      canvas[idx + 2] = Math.floor(237 + (255 - 237) * ratio);
+      canvas[idx + 3] = 255;
     }
   }
   
@@ -145,7 +155,6 @@ function createTrayIcon() {
 function createTray() {
   let trayIcon;
   
-  // Try to load icon from file, fallback to generated icon
   const iconPath = path.join(__dirname, '../assets/tray-icon.png');
   try {
     if (fs.existsSync(iconPath)) {
@@ -215,6 +224,18 @@ function updateTrayMenu() {
     },
     { type: 'separator' },
     {
+      label: 'Settings',
+      click: () => {
+        if (mainWindow) {
+          mainWindow.show();
+          mainWindow.webContents.send('navigate', 'settings');
+        } else {
+          createWindow();
+        }
+      }
+    },
+    { type: 'separator' },
+    {
       label: 'Quit',
       click: () => {
         stopWorker();
@@ -242,10 +263,13 @@ function sendStatusToRenderer() {
       stats,
       config: {
         apiKey: config.apiKey ? '***' + config.apiKey.slice(-6) : '',
-        serverUrl: config.serverUrl,
+        serverUrl: SERVER_URL,
         autoStart: config.autoStart,
-        minimizeToTray: config.minimizeToTray
-      }
+        minimizeToTray: config.minimizeToTray,
+        startMinimized: config.startMinimized,
+        selectedModel: config.selectedModel
+      },
+      ollamaDownloadProgress
     });
   }
 }
@@ -266,35 +290,216 @@ async function checkOllama() {
   });
 }
 
-// Install Ollama
+// Check if Ollama service is running
+async function checkOllamaRunning() {
+  return new Promise((resolve) => {
+    http.get(`${OLLAMA_HOST}/api/version`, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const info = JSON.parse(data);
+          resolve(true);
+        } catch {
+          resolve(false);
+        }
+      });
+    }).on('error', () => {
+      resolve(false);
+    });
+  });
+}
+
+// Start Ollama service
+async function startOllamaService() {
+  return new Promise((resolve) => {
+    if (process.platform === 'win32') {
+      exec('ollama serve', { detached: true, stdio: 'ignore' });
+    } else {
+      exec('ollama serve &', { detached: true, stdio: 'ignore' });
+    }
+    // Wait for service to start
+    setTimeout(() => resolve(true), 3000);
+  });
+}
+
+// Download file with progress
+function downloadFile(url, destPath, progressCallback) {
+  return new Promise((resolve, reject) => {
+    const file = fs.createWriteStream(destPath);
+    
+    const makeRequest = (requestUrl) => {
+      https.get(requestUrl, (response) => {
+        if (response.statusCode === 302 || response.statusCode === 301) {
+          makeRequest(response.headers.location);
+          return;
+        }
+        
+        const totalBytes = parseInt(response.headers['content-length'], 10);
+        let downloadedBytes = 0;
+        
+        response.on('data', (chunk) => {
+          downloadedBytes += chunk.length;
+          const progress = Math.round((downloadedBytes / totalBytes) * 100);
+          if (progressCallback) progressCallback(progress);
+        });
+        
+        response.pipe(file);
+        
+        file.on('finish', () => {
+          file.close();
+          resolve(destPath);
+        });
+      }).on('error', (err) => {
+        fs.unlink(destPath, () => {});
+        reject(err);
+      });
+    };
+    
+    makeRequest(url);
+  });
+}
+
+// Install Ollama with automatic download
 async function installOllama() {
-  stats.ollamaStatus = 'installing...';
+  stats.ollamaStatus = 'downloading...';
+  ollamaDownloadProgress = 0;
   sendStatusToRenderer();
 
-  return new Promise((resolve, reject) => {
-    if (process.platform === 'linux') {
-      exec('curl -fsSL https://ollama.com/install.sh | sh', (error, stdout, stderr) => {
-        if (error) {
-          stats.ollamaStatus = 'install failed';
-          reject(error);
-        } else {
-          stats.ollamaStatus = 'installed';
-          resolve(true);
-        }
+  const platform = process.platform;
+  const downloadUrl = OLLAMA_DOWNLOAD_URLS[platform];
+  
+  if (!downloadUrl) {
+    stats.ollamaStatus = 'unsupported platform';
+    sendStatusToRenderer();
+    return false;
+  }
+
+  try {
+    if (platform === 'linux') {
+      // Linux: use curl install script
+      stats.ollamaStatus = 'installing...';
+      sendStatusToRenderer();
+      
+      return new Promise((resolve, reject) => {
+        exec('curl -fsSL https://ollama.com/install.sh | sh', (error) => {
+          if (error) {
+            stats.ollamaStatus = 'install failed';
+            sendStatusToRenderer();
+            reject(error);
+          } else {
+            stats.ollamaStatus = 'installed';
+            sendStatusToRenderer();
+            resolve(true);
+          }
+        });
+      });
+    } else if (platform === 'win32') {
+      // Windows: download and run installer silently
+      const tempDir = os.tmpdir();
+      const installerPath = path.join(tempDir, 'OllamaSetup.exe');
+      
+      await downloadFile(downloadUrl, installerPath, (progress) => {
+        ollamaDownloadProgress = progress;
+        stats.ollamaStatus = `downloading... ${progress}%`;
         sendStatusToRenderer();
       });
-    } else if (process.platform === 'darwin') {
-      shell.openExternal('https://ollama.com/download/mac');
-      stats.ollamaStatus = 'manual install required';
-      resolve(false);
-    } else if (process.platform === 'win32') {
-      shell.openExternal('https://ollama.com/download/windows');
-      stats.ollamaStatus = 'manual install required';
-      resolve(false);
-    } else {
-      reject(new Error('Unsupported platform'));
+      
+      stats.ollamaStatus = 'installing...';
+      sendStatusToRenderer();
+      
+      // Run installer silently
+      return new Promise((resolve, reject) => {
+        exec(`"${installerPath}" /S`, (error) => {
+          // Clean up installer
+          fs.unlink(installerPath, () => {});
+          
+          if (error) {
+            // Try alternative installation method
+            exec(`start /wait "${installerPath}"`, (error2) => {
+              if (error2) {
+                stats.ollamaStatus = 'install failed - please install manually';
+                sendStatusToRenderer();
+                shell.openExternal('https://ollama.com/download/windows');
+                reject(error2);
+              } else {
+                stats.ollamaStatus = 'installed';
+                sendStatusToRenderer();
+                resolve(true);
+              }
+            });
+          } else {
+            stats.ollamaStatus = 'installed';
+            ollamaDownloadProgress = 0;
+            sendStatusToRenderer();
+            resolve(true);
+          }
+        });
+      });
+    } else if (platform === 'darwin') {
+      // macOS: download zip and extract
+      const tempDir = os.tmpdir();
+      const zipPath = path.join(tempDir, 'Ollama.zip');
+      
+      await downloadFile(downloadUrl, zipPath, (progress) => {
+        ollamaDownloadProgress = progress;
+        stats.ollamaStatus = `downloading... ${progress}%`;
+        sendStatusToRenderer();
+      });
+      
+      stats.ollamaStatus = 'installing...';
+      sendStatusToRenderer();
+      
+      return new Promise((resolve, reject) => {
+        exec(`unzip -o "${zipPath}" -d /Applications && open /Applications/Ollama.app`, (error) => {
+          fs.unlink(zipPath, () => {});
+          
+          if (error) {
+            stats.ollamaStatus = 'install failed';
+            sendStatusToRenderer();
+            shell.openExternal('https://ollama.com/download/mac');
+            reject(error);
+          } else {
+            stats.ollamaStatus = 'installed';
+            ollamaDownloadProgress = 0;
+            sendStatusToRenderer();
+            resolve(true);
+          }
+        });
+      });
     }
+  } catch (err) {
+    console.error('Ollama installation failed:', err);
+    stats.ollamaStatus = 'install failed';
+    ollamaDownloadProgress = 0;
     sendStatusToRenderer();
+    return false;
+  }
+}
+
+// Get installed Ollama models
+async function getOllamaModels() {
+  return new Promise((resolve) => {
+    http.get(`${OLLAMA_HOST}/api/tags`, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const response = JSON.parse(data);
+          const models = response.models || [];
+          stats.ollamaModels = models.map(m => ({
+            name: m.name,
+            size: m.size,
+            modified: m.modified_at
+          }));
+          resolve(stats.ollamaModels);
+        } catch {
+          resolve([]);
+        }
+      });
+    }).on('error', () => {
+      resolve([]);
+    });
   });
 }
 
@@ -306,12 +511,30 @@ async function pullModel(modelName) {
 
     exec(`ollama pull ${modelName}`, { timeout: 600000 }, (error, stdout, stderr) => {
       if (error) {
+        stats.ollamaStatus = `pull failed: ${error.message}`;
+        sendStatusToRenderer();
         reject(error);
       } else {
         stats.ollamaStatus = `${modelName} ready`;
+        getOllamaModels();
+        sendStatusToRenderer();
         resolve(true);
       }
-      sendStatusToRenderer();
+    });
+  });
+}
+
+// Delete Ollama model
+async function deleteModel(modelName) {
+  return new Promise((resolve, reject) => {
+    exec(`ollama rm ${modelName}`, (error) => {
+      if (error) {
+        reject(error);
+      } else {
+        getOllamaModels();
+        sendStatusToRenderer();
+        resolve(true);
+      }
     });
   });
 }
@@ -319,7 +542,8 @@ async function pullModel(modelName) {
 // Start the worker
 async function startWorker() {
   if (isWorkerRunning) return;
-  if (!config.apiKey || !config.serverUrl) {
+  if (!config.apiKey) {
+    stats.status = 'API key required';
     sendStatusToRenderer();
     return;
   }
@@ -338,6 +562,15 @@ async function startWorker() {
       console.error('Ollama install failed:', err);
     }
   }
+  
+  // Ensure Ollama service is running
+  const ollamaRunning = await checkOllamaRunning();
+  if (!ollamaRunning) {
+    await startOllamaService();
+  }
+  
+  // Get current models
+  await getOllamaModels();
 
   // Start the worker process with integrity info
   const workerScript = path.join(__dirname, 'worker.js');
@@ -347,9 +580,10 @@ async function startWorker() {
     env: {
       ...process.env,
       CG_API_KEY: config.apiKey,
-      CG_SERVER_URL: config.serverUrl,
+      CG_SERVER_URL: SERVER_URL,
       CG_APP_VERSION: APP_VERSION,
-      CG_APP_SIGNATURE: appSignature
+      CG_APP_SIGNATURE: appSignature,
+      CG_SELECTED_MODEL: config.selectedModel
     },
     stdio: ['pipe', 'pipe', 'pipe', 'ipc']
   });
@@ -415,6 +649,62 @@ function stopWorker() {
   updateTrayMenu();
 }
 
+// Clear app data
+function clearAppData() {
+  try {
+    if (fs.existsSync(CONFIG_PATH)) {
+      fs.unlinkSync(CONFIG_PATH);
+    }
+    config = {
+      apiKey: '',
+      autoStart: false,
+      minimizeToTray: true,
+      startMinimized: false,
+      selectedModel: 'mistral'
+    };
+    stats = {
+      tasksCompleted: 0,
+      earnings: '0.00',
+      status: 'stopped',
+      ollamaStatus: 'checking...',
+      ollamaModels: []
+    };
+    sendStatusToRenderer();
+    return true;
+  } catch (err) {
+    console.error('Failed to clear data:', err);
+    return false;
+  }
+}
+
+// Uninstall the app
+async function uninstallApp() {
+  stopWorker();
+  clearAppData();
+  
+  // Show instructions based on platform
+  const platform = process.platform;
+  let instructions = '';
+  
+  if (platform === 'win32') {
+    instructions = 'To complete uninstallation:\n\n1. Open Settings > Apps\n2. Find "ComputeGrid Worker"\n3. Click Uninstall\n\nOr use Control Panel > Programs and Features';
+  } else if (platform === 'darwin') {
+    instructions = 'To complete uninstallation:\n\n1. Open Finder\n2. Go to Applications\n3. Drag "ComputeGrid Worker" to Trash';
+  } else {
+    instructions = 'To complete uninstallation:\n\nDelete the AppImage file you used to run this application.';
+  }
+  
+  dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: 'Uninstall ComputeGrid Worker',
+    message: 'App data has been cleared.',
+    detail: instructions,
+    buttons: ['OK']
+  }).then(() => {
+    app.quit();
+  });
+}
+
 // IPC handlers
 ipcMain.handle('get-status', () => {
   return {
@@ -422,16 +712,24 @@ ipcMain.handle('get-status', () => {
     stats,
     config: {
       apiKey: config.apiKey ? '***' + config.apiKey.slice(-6) : '',
-      serverUrl: config.serverUrl,
+      serverUrl: SERVER_URL,
       autoStart: config.autoStart,
-      minimizeToTray: config.minimizeToTray
-    }
+      minimizeToTray: config.minimizeToTray,
+      startMinimized: config.startMinimized,
+      selectedModel: config.selectedModel
+    },
+    ollamaDownloadProgress
   };
+});
+
+ipcMain.handle('get-server-url', () => {
+  return SERVER_URL;
 });
 
 ipcMain.handle('save-config', (event, newConfig) => {
   config = { ...config, ...newConfig };
   saveConfig();
+  setupAutoStart();
   sendStatusToRenderer();
   return true;
 });
@@ -447,15 +745,31 @@ ipcMain.handle('stop-worker', () => {
 });
 
 ipcMain.handle('check-ollama', async () => {
-  return await checkOllama();
+  const installed = await checkOllama();
+  if (installed) {
+    const running = await checkOllamaRunning();
+    if (!running) {
+      await startOllamaService();
+    }
+    await getOllamaModels();
+  }
+  return installed;
 });
 
 ipcMain.handle('install-ollama', async () => {
   return await installOllama();
 });
 
+ipcMain.handle('get-ollama-models', async () => {
+  return await getOllamaModels();
+});
+
 ipcMain.handle('pull-model', async (event, modelName) => {
   return await pullModel(modelName);
+});
+
+ipcMain.handle('delete-model', async (event, modelName) => {
+  return await deleteModel(modelName);
 });
 
 ipcMain.handle('open-external', (event, url) => {
@@ -466,11 +780,41 @@ ipcMain.handle('get-version', () => {
   return APP_VERSION;
 });
 
+ipcMain.handle('check-for-updates', async () => {
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    return result;
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('clear-data', () => {
+  return clearAppData();
+});
+
+ipcMain.handle('uninstall-app', () => {
+  uninstallApp();
+  return true;
+});
+
+ipcMain.handle('get-app-info', () => {
+  return {
+    version: APP_VERSION,
+    platform: process.platform,
+    arch: process.arch,
+    electronVersion: process.versions.electron,
+    nodeVersion: process.versions.node,
+    dataPath: app.getPath('userData'),
+    serverUrl: SERVER_URL
+  };
+});
+
 // Auto-start configuration
 function setupAutoStart() {
   app.setLoginItemSettings({
     openAtLogin: config.autoStart,
-    openAsHidden: true
+    openAsHidden: config.startMinimized
   });
 }
 
@@ -486,21 +830,32 @@ function setupAutoUpdater() {
   autoUpdater.on('update-available', (info) => {
     console.log('Update available:', info.version);
     showNotification('Update Available', `Version ${info.version} is downloading...`);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-status', { status: 'downloading', version: info.version });
+    }
   });
 
   autoUpdater.on('update-not-available', () => {
     console.log('No updates available');
+    if (mainWindow) {
+      mainWindow.webContents.send('update-status', { status: 'up-to-date' });
+    }
   });
 
   autoUpdater.on('download-progress', (progress) => {
     console.log(`Download progress: ${Math.round(progress.percent)}%`);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-status', { status: 'downloading', progress: progress.percent });
+    }
   });
 
   autoUpdater.on('update-downloaded', (info) => {
     console.log('Update downloaded:', info.version);
     showNotification('Update Ready', `Version ${info.version} will install on restart`);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-status', { status: 'ready', version: info.version });
+    }
     
-    // If worker is not running, offer to restart now
     if (!isWorkerRunning) {
       dialog.showMessageBox(mainWindow, {
         type: 'info',
@@ -517,14 +872,15 @@ function setupAutoUpdater() {
 
   autoUpdater.on('error', (err) => {
     console.error('Auto-update error:', err);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-status', { status: 'error', message: err.message });
+    }
   });
 
-  // Check for updates on startup
   autoUpdater.checkForUpdates().catch(err => {
     console.log('Update check failed (may be in development):', err.message);
   });
 
-  // Check for updates every hour
   setInterval(() => {
     autoUpdater.checkForUpdates().catch(() => {});
   }, 60 * 60 * 1000);
@@ -540,8 +896,21 @@ app.whenReady().then(() => {
 
   console.log(`ComputeGrid Worker v${APP_VERSION} started`);
   console.log(`App signature: ${generateAppSignature()}`);
+  console.log(`Server URL: ${SERVER_URL}`);
 
-  if (config.autoStart && config.apiKey && config.serverUrl) {
+  // Check Ollama on startup
+  checkOllama().then(installed => {
+    if (installed) {
+      checkOllamaRunning().then(running => {
+        if (!running) {
+          startOllamaService();
+        }
+        getOllamaModels();
+      });
+    }
+  });
+
+  if (config.autoStart && config.apiKey) {
     startWorker();
   }
 });
