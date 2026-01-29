@@ -46,7 +46,7 @@
     }
 
     .header {
-      padding: 20px 24px;
+      padding: 16px 20px;
       background: var(--bg-secondary);
       border-bottom: 1px solid var(--border-subtle);
       display: flex;
@@ -55,14 +55,14 @@
     }
 
     .logo-icon {
-      width: 36px;
-      height: 36px;
+      width: 32px;
+      height: 32px;
       background: linear-gradient(135deg, var(--primary), var(--accent));
       border-radius: var(--radius);
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 18px;
+      font-size: 14px;
       font-weight: 700;
       color: white;
       flex-shrink: 0;
@@ -71,10 +71,11 @@
     .header-text {
       display: flex;
       flex-direction: column;
+      flex: 1;
     }
 
     .logo {
-      font-size: 18px;
+      font-size: 16px;
       font-weight: 600;
       color: var(--text-primary);
       letter-spacing: -0.02em;
@@ -82,23 +83,75 @@
 
     .subtitle {
       color: var(--text-muted);
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 400;
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .icon-btn {
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border-color);
+      background: var(--bg-tertiary);
+      color: var(--text-secondary);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all var(--transition);
+      font-size: 16px;
+    }
+
+    .icon-btn:hover {
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+      border-color: var(--text-muted);
+    }
+
+    .icon-btn.active {
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary);
+    }
+
+    .version-badge {
+      padding: 2px 8px;
+      background: var(--bg-tertiary);
+      border-radius: 20px;
+      font-size: 10px;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .page {
+      display: none;
+      flex: 1;
+      overflow-y: auto;
+    }
+
+    .page.active {
+      display: flex;
+      flex-direction: column;
     }
 
     .content {
       flex: 1;
-      padding: 20px 24px;
+      padding: 16px 20px;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
-      gap: 16px;
+      gap: 14px;
     }
 
     .status-card {
       background: var(--bg-secondary);
       border-radius: var(--radius-lg);
-      padding: 20px;
+      padding: 16px;
       border: 1px solid var(--border-subtle);
     }
 
@@ -106,7 +159,7 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 16px;
+      margin-bottom: 14px;
     }
 
     .status-indicator {
@@ -145,13 +198,13 @@
     .stats-grid {
       display: grid;
       grid-template-columns: repeat(2, 1fr);
-      gap: 12px;
+      gap: 10px;
     }
 
     .stat-item {
       background: var(--bg-tertiary);
       border-radius: var(--radius);
-      padding: 16px;
+      padding: 14px;
       text-align: center;
       border: 1px solid var(--border-subtle);
       transition: border-color var(--transition);
@@ -162,14 +215,14 @@
     }
 
     .stat-value {
-      font-size: 22px;
+      font-size: 20px;
       font-weight: 600;
       color: var(--primary);
       font-variant-numeric: tabular-nums;
     }
 
     .stat-label {
-      font-size: 11px;
+      font-size: 10px;
       color: var(--text-muted);
       margin-top: 4px;
       text-transform: uppercase;
@@ -181,7 +234,7 @@
       display: flex;
       align-items: center;
       gap: 10px;
-      padding: 12px 16px;
+      padding: 12px 14px;
       background: var(--bg-secondary);
       border-radius: var(--radius);
       border: 1px solid var(--border-subtle);
@@ -204,15 +257,30 @@
     }
 
     .ollama-status-text {
-      font-size: 13px;
+      font-size: 12px;
       color: var(--text-secondary);
       flex: 1;
+    }
+
+    .progress-bar {
+      height: 4px;
+      background: var(--bg-tertiary);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: var(--primary);
+      border-radius: 2px;
+      transition: width 0.3s ease;
     }
 
     .config-section {
       background: var(--bg-secondary);
       border-radius: var(--radius-lg);
-      padding: 20px;
+      padding: 16px;
       border: 1px solid var(--border-subtle);
     }
 
@@ -220,31 +288,37 @@
       font-size: 11px;
       font-weight: 600;
       color: var(--text-muted);
-      margin-bottom: 16px;
+      margin-bottom: 14px;
       text-transform: uppercase;
       letter-spacing: 0.08em;
     }
 
     .input-group {
-      margin-bottom: 14px;
+      margin-bottom: 12px;
     }
 
     .input-label {
       display: block;
-      font-size: 13px;
+      font-size: 12px;
       color: var(--text-secondary);
       margin-bottom: 6px;
       font-weight: 500;
     }
 
+    .input-hint {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
     .input-field {
       width: 100%;
-      padding: 10px 14px;
+      padding: 10px 12px;
       border-radius: var(--radius);
       border: 1px solid var(--border-color);
       background: var(--bg-tertiary);
       color: var(--text-primary);
-      font-size: 14px;
+      font-size: 13px;
       font-family: inherit;
       transition: border-color var(--transition), box-shadow var(--transition);
     }
@@ -261,6 +335,12 @@
 
     .input-field::placeholder {
       color: var(--text-muted);
+    }
+
+    .input-field:read-only {
+      background: var(--bg-primary);
+      color: var(--text-muted);
+      cursor: default;
     }
 
     .checkbox-group {
@@ -294,10 +374,10 @@
 
     .btn {
       flex: 1;
-      padding: 12px 20px;
+      padding: 10px 16px;
       border-radius: var(--radius);
       border: none;
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 500;
       font-family: inherit;
       cursor: pointer;
@@ -352,12 +432,20 @@
 
     .btn-small {
       padding: 6px 12px;
-      font-size: 12px;
+      font-size: 11px;
       flex: none;
     }
 
+    .btn-icon {
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      flex: none;
+      font-size: 14px;
+    }
+
     .footer {
-      padding: 14px 24px;
+      padding: 12px 20px;
       text-align: center;
       background: var(--bg-secondary);
       border-top: 1px solid var(--border-subtle);
@@ -366,7 +454,7 @@
     .footer-link {
       color: var(--primary);
       text-decoration: none;
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 500;
       transition: color var(--transition);
     }
@@ -375,15 +463,223 @@
       color: var(--primary-hover);
     }
 
-    .version-badge {
-      display: inline-block;
-      padding: 2px 8px;
-      background: var(--bg-tertiary);
-      border-radius: 20px;
-      font-size: 10px;
+    /* Settings page styles */
+    .settings-group {
+      background: var(--bg-secondary);
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--border-subtle);
+      overflow: hidden;
+      margin-bottom: 14px;
+    }
+
+    .settings-group-title {
+      font-size: 11px;
+      font-weight: 600;
       color: var(--text-muted);
-      margin-left: auto;
+      padding: 12px 16px 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .settings-item {
+      display: flex;
+      align-items: center;
+      padding: 12px 16px;
+      border-top: 1px solid var(--border-subtle);
+      gap: 12px;
+      cursor: pointer;
+      transition: background var(--transition);
+    }
+
+    .settings-item:first-child {
+      border-top: none;
+    }
+
+    .settings-item:hover {
+      background: var(--bg-tertiary);
+    }
+
+    .settings-item.danger:hover {
+      background: hsla(0, 72%, 51%, 0.1);
+    }
+
+    .settings-item-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius);
+      background: var(--bg-tertiary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+
+    .settings-item.danger .settings-item-icon {
+      background: hsla(0, 72%, 51%, 0.15);
+      color: var(--danger);
+    }
+
+    .settings-item-content {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .settings-item-title {
+      font-size: 13px;
       font-weight: 500;
+      color: var(--text-primary);
+    }
+
+    .settings-item.danger .settings-item-title {
+      color: var(--danger);
+    }
+
+    .settings-item-subtitle {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .settings-item-value {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .settings-item-action {
+      color: var(--text-muted);
+      font-size: 16px;
+    }
+
+    .toggle-switch {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      background: var(--bg-tertiary);
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background var(--transition);
+      border: 1px solid var(--border-color);
+    }
+
+    .toggle-switch.active {
+      background: var(--primary);
+      border-color: var(--primary);
+    }
+
+    .toggle-switch::after {
+      content: '';
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 16px;
+      height: 16px;
+      background: white;
+      border-radius: 50%;
+      transition: transform var(--transition);
+    }
+
+    .toggle-switch.active::after {
+      transform: translateX(20px);
+    }
+
+    /* Model management */
+    .model-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .model-item {
+      display: flex;
+      align-items: center;
+      padding: 10px 12px;
+      background: var(--bg-tertiary);
+      border-radius: var(--radius);
+      border: 1px solid var(--border-subtle);
+      gap: 10px;
+    }
+
+    .model-item-info {
+      flex: 1;
+    }
+
+    .model-item-name {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+
+    .model-item-size {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .model-select {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border-color);
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      font-size: 13px;
+      font-family: inherit;
+      cursor: pointer;
+    }
+
+    .model-select:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+
+    /* About section */
+    .about-info {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 16px;
+    }
+
+    .about-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+    }
+
+    .about-label {
+      color: var(--text-muted);
+    }
+
+    .about-value {
+      color: var(--text-secondary);
+      font-family: monospace;
+    }
+
+    /* Back button */
+    .back-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px;
+      background: transparent;
+      border: none;
+      color: var(--primary);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      margin-bottom: 8px;
+    }
+
+    .back-btn:hover {
+      color: var(--primary-hover);
+    }
+
+    .page-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 16px;
+      padding: 0 4px;
     }
   </style>
 </head>
@@ -395,66 +691,229 @@
       <div class="subtitle">Worker Desktop App</div>
     </div>
     <span class="version-badge" id="versionBadge">v1.0.0</span>
-  </div>
-
-  <div class="content">
-    <div class="status-card">
-      <div class="status-header">
-        <div class="status-indicator">
-          <div class="status-dot" id="statusDot"></div>
-          <span class="status-text" id="statusText">Stopped</span>
-        </div>
-      </div>
-      <div class="stats-grid">
-        <div class="stat-item">
-          <div class="stat-value" id="earnings">$0.00</div>
-          <div class="stat-label">Earnings</div>
-        </div>
-        <div class="stat-item">
-          <div class="stat-value" id="tasksCompleted">0</div>
-          <div class="stat-label">Tasks Completed</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="ollama-status">
-      <div class="ollama-status-dot" id="ollamaDot"></div>
-      <span class="ollama-status-text" id="ollamaStatus">Checking Ollama...</span>
-      <button class="btn btn-secondary btn-small" id="installOllamaBtn" style="display: none;">Install</button>
-    </div>
-
-    <div class="config-section">
-      <div class="section-title">Configuration</div>
-      
-      <div class="input-group">
-        <label class="input-label" for="serverUrl">Server URL</label>
-        <input type="text" class="input-field" id="serverUrl" placeholder="https://your-computegrid-server.com">
-      </div>
-
-      <div class="input-group">
-        <label class="input-label" for="apiKey">API Key</label>
-        <input type="password" class="input-field" id="apiKey" placeholder="Enter your API key">
-      </div>
-
-      <div class="checkbox-group">
-        <input type="checkbox" class="checkbox" id="autoStart">
-        <label class="checkbox-label" for="autoStart">Start automatically on login</label>
-      </div>
-
-      <div class="checkbox-group">
-        <input type="checkbox" class="checkbox" id="minimizeToTray" checked>
-        <label class="checkbox-label" for="minimizeToTray">Minimize to tray when closed</label>
-      </div>
-
-      <div class="actions">
-        <button class="btn btn-secondary" id="saveBtn">Save Settings</button>
-        <button class="btn btn-primary" id="startBtn">Start Worker</button>
-      </div>
+    <div class="header-actions">
+      <button class="icon-btn" id="settingsBtn" title="Settings">&#9881;</button>
     </div>
   </div>
 
-  <div class="footer">
-    <a href="#" class="footer-link" id="dashboardLink">Open Web Dashboard</a>
+  <!-- Main Page -->
+  <div class="page active" id="mainPage">
+    <div class="content">
+      <div class="status-card">
+        <div class="status-header">
+          <div class="status-indicator">
+            <div class="status-dot" id="statusDot"></div>
+            <span class="status-text" id="statusText">Stopped</span>
+          </div>
+        </div>
+        <div class="stats-grid">
+          <div class="stat-item">
+            <div class="stat-value" id="earnings">$0.00</div>
+            <div class="stat-label">Earnings</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value" id="tasksCompleted">0</div>
+            <div class="stat-label">Tasks Completed</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="ollama-status" id="ollamaStatusCard">
+        <div class="ollama-status-dot" id="ollamaDot"></div>
+        <div style="flex: 1;">
+          <span class="ollama-status-text" id="ollamaStatus">Checking Ollama...</span>
+          <div class="progress-bar" id="ollamaProgress" style="display: none;">
+            <div class="progress-fill" id="ollamaProgressFill" style="width: 0%;"></div>
+          </div>
+        </div>
+        <button class="btn btn-secondary btn-small" id="installOllamaBtn" style="display: none;">Install</button>
+      </div>
+
+      <div class="config-section">
+        <div class="section-title">Configuration</div>
+        
+        <div class="input-group">
+          <label class="input-label" for="apiKey">API Key</label>
+          <input type="password" class="input-field" id="apiKey" placeholder="Enter your API key from the dashboard">
+          <div class="input-hint">Get your API key from the <a href="#" id="getApiKeyLink" style="color: var(--primary);">web dashboard</a></div>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-secondary" id="saveBtn">Save</button>
+          <button class="btn btn-primary" id="startBtn">Start Worker</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <a href="#" class="footer-link" id="dashboardLink">Open Web Dashboard</a>
+    </div>
+  </div>
+
+  <!-- Settings Page -->
+  <div class="page" id="settingsPage">
+    <div class="content">
+      <button class="back-btn" id="backBtn">&larr; Back</button>
+      <div class="page-title">Settings</div>
+
+      <div class="settings-group">
+        <div class="settings-group-title">Startup</div>
+        <div class="settings-item" id="autoStartToggle">
+          <div class="settings-item-icon">&#128187;</div>
+          <div class="settings-item-content">
+            <div class="settings-item-title">Start on login</div>
+            <div class="settings-item-subtitle">Automatically start when you log in</div>
+          </div>
+          <div class="toggle-switch" id="autoStartSwitch"></div>
+        </div>
+        <div class="settings-item" id="startMinimizedToggle">
+          <div class="settings-item-icon">&#128065;</div>
+          <div class="settings-item-content">
+            <div class="settings-item-title">Start minimized</div>
+            <div class="settings-item-subtitle">Start in system tray</div>
+          </div>
+          <div class="toggle-switch" id="startMinimizedSwitch"></div>
+        </div>
+        <div class="settings-item" id="minimizeToTrayToggle">
+          <div class="settings-item-icon">&#128230;</div>
+          <div class="settings-item-content">
+            <div class="settings-item-title">Minimize to tray</div>
+            <div class="settings-item-subtitle">Keep running when window is closed</div>
+          </div>
+          <div class="toggle-switch" id="minimizeToTraySwitch"></div>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <div class="settings-group-title">AI Models</div>
+        <div class="settings-item" id="manageModelsBtn">
+          <div class="settings-item-icon">&#129302;</div>
+          <div class="settings-item-content">
+            <div class="settings-item-title">Manage AI models</div>
+            <div class="settings-item-subtitle" id="modelCount">0 models installed</div>
+          </div>
+          <div class="settings-item-action">&rsaquo;</div>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <div class="settings-group-title">App</div>
+        <div class="settings-item" id="checkUpdatesBtn">
+          <div class="settings-item-icon">&#8635;</div>
+          <div class="settings-item-content">
+            <div class="settings-item-title">Check for updates</div>
+            <div class="settings-item-subtitle" id="updateStatus">Click to check</div>
+          </div>
+          <div class="settings-item-action">&rsaquo;</div>
+        </div>
+        <div class="settings-item" id="clearDataBtn">
+          <div class="settings-item-icon">&#128465;</div>
+          <div class="settings-item-content">
+            <div class="settings-item-title">Clear app data</div>
+            <div class="settings-item-subtitle">Reset settings and stored data</div>
+          </div>
+          <div class="settings-item-action">&rsaquo;</div>
+        </div>
+        <div class="settings-item" id="aboutBtn">
+          <div class="settings-item-icon">&#8505;</div>
+          <div class="settings-item-content">
+            <div class="settings-item-title">About</div>
+            <div class="settings-item-subtitle">Version and system info</div>
+          </div>
+          <div class="settings-item-action">&rsaquo;</div>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <div class="settings-item danger" id="uninstallBtn">
+          <div class="settings-item-icon">&#10060;</div>
+          <div class="settings-item-content">
+            <div class="settings-item-title">Uninstall</div>
+            <div class="settings-item-subtitle">Remove ComputeGrid Worker</div>
+          </div>
+          <div class="settings-item-action">&rsaquo;</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Models Page -->
+  <div class="page" id="modelsPage">
+    <div class="content">
+      <button class="back-btn" id="modelsBackBtn">&larr; Back</button>
+      <div class="page-title">AI Models</div>
+
+      <div class="config-section">
+        <div class="section-title">Preferred Model</div>
+        <select class="model-select" id="preferredModel">
+          <option value="mistral">Mistral 7B (Recommended)</option>
+          <option value="llama2">Llama 2 7B</option>
+          <option value="tinyllama">TinyLlama (Low RAM)</option>
+          <option value="phi">Phi-2 (Fast)</option>
+        </select>
+        <div class="input-hint" style="margin-top: 8px;">Used for processing AI tasks</div>
+      </div>
+
+      <div class="config-section">
+        <div class="section-title">Installed Models</div>
+        <div class="model-list" id="modelList">
+          <div class="input-hint">No models installed yet</div>
+        </div>
+      </div>
+
+      <div class="config-section">
+        <div class="section-title">Download Model</div>
+        <div class="input-group" style="margin-bottom: 0;">
+          <input type="text" class="input-field" id="newModelName" placeholder="e.g., mistral, llama2, tinyllama">
+        </div>
+        <div class="actions" style="margin-top: 12px;">
+          <button class="btn btn-primary" id="pullModelBtn">Download Model</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- About Page -->
+  <div class="page" id="aboutPage">
+    <div class="content">
+      <button class="back-btn" id="aboutBackBtn">&larr; Back</button>
+      <div class="page-title">About</div>
+
+      <div class="config-section">
+        <div class="about-info" id="aboutInfo">
+          <div class="about-row">
+            <span class="about-label">Version</span>
+            <span class="about-value" id="aboutVersion">-</span>
+          </div>
+          <div class="about-row">
+            <span class="about-label">Platform</span>
+            <span class="about-value" id="aboutPlatform">-</span>
+          </div>
+          <div class="about-row">
+            <span class="about-label">Architecture</span>
+            <span class="about-value" id="aboutArch">-</span>
+          </div>
+          <div class="about-row">
+            <span class="about-label">Electron</span>
+            <span class="about-value" id="aboutElectron">-</span>
+          </div>
+          <div class="about-row">
+            <span class="about-label">Node.js</span>
+            <span class="about-value" id="aboutNode">-</span>
+          </div>
+          <div class="about-row">
+            <span class="about-label">Server</span>
+            <span class="about-value" id="aboutServer">-</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="config-section">
+        <div class="actions">
+          <button class="btn btn-secondary" id="openGithubBtn">View on GitHub</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="renderer.js"></script>
