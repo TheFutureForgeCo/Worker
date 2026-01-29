@@ -8,6 +8,26 @@ const http = require('http');
 const os = require('os');
 const { autoUpdater } = require('electron-updater');
 
+// Single instance lock - prevent multiple windows
+const gotTheLock = app.requestSingleInstanceLock();
+
+if (!gotTheLock) {
+  // Another instance is already running - quit this one
+  app.quit();
+} else {
+  // This is the first instance - handle second-instance events
+  app.on('second-instance', (event, commandLine, workingDirectory) => {
+    // Someone tried to run a second instance, focus our window instead
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+      }
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+}
+
 // App version and integrity
 const APP_VERSION = require('../package.json').version;
 const INTEGRITY_CHECK_INTERVAL = 5 * 60 * 1000;
