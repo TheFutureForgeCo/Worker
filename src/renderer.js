@@ -7,7 +7,6 @@ const ollamaDot = document.getElementById('ollamaDot');
 const ollamaStatus = document.getElementById('ollamaStatus');
 const ollamaProgress = document.getElementById('ollamaProgress');
 const ollamaProgressFill = document.getElementById('ollamaProgressFill');
-const installOllamaBtn = document.getElementById('installOllamaBtn');
 const apiKey = document.getElementById('apiKey');
 const saveBtn = document.getElementById('saveBtn');
 const startBtn = document.getElementById('startBtn');
@@ -143,7 +142,16 @@ async function checkOllamaStatus() {
 
 // Update Ollama UI
 function updateOllamaUI(status, progress = 0) {
-  ollamaStatus.textContent = `Ollama: ${status}`;
+  // Show AI status in a user-friendly way
+  let displayStatus = status;
+  if (status === 'checking...') displayStatus = 'Checking AI...';
+  else if (status === 'downloading AI...') displayStatus = 'Downloading AI...';
+  else if (status === 'downloading AI model...') displayStatus = 'Downloading AI model...';
+  else if (status === 'starting AI service...') displayStatus = 'Starting AI...';
+  else if (status === 'installed' || status === 'ready') displayStatus = 'AI Ready';
+  else if (status.includes('ready')) displayStatus = 'AI Ready';
+  
+  ollamaStatus.textContent = displayStatus;
   
   // Show/hide progress bar
   if (progress > 0 && progress < 100) {
@@ -153,20 +161,16 @@ function updateOllamaUI(status, progress = 0) {
     ollamaProgress.style.display = 'none';
   }
   
-  if (status === 'installed' || status.includes('ready') || status.includes('pulling')) {
+  if (status === 'installed' || status.includes('ready')) {
     ollamaDot.classList.add('ready');
     ollamaDot.classList.remove('error');
-    installOllamaBtn.style.display = 'none';
-  } else if (status === 'not installed' || status.includes('failed')) {
+  } else if (status.includes('failed')) {
     ollamaDot.classList.remove('ready');
     ollamaDot.classList.add('error');
-    installOllamaBtn.style.display = 'block';
-  } else if (status.includes('downloading') || status.includes('installing')) {
+  } else if (status.includes('downloading') || status.includes('installing') || status.includes('starting')) {
     ollamaDot.classList.remove('ready', 'error');
-    installOllamaBtn.style.display = 'none';
   } else {
     ollamaDot.classList.remove('ready', 'error');
-    installOllamaBtn.style.display = 'none';
   }
 }
 
@@ -231,16 +235,6 @@ startBtn.addEventListener('click', async () => {
   }
   
   startBtn.disabled = false;
-});
-
-installOllamaBtn.addEventListener('click', async () => {
-  installOllamaBtn.disabled = true;
-  installOllamaBtn.textContent = 'Installing...';
-  
-  await window.electronAPI.installOllama();
-  
-  installOllamaBtn.disabled = false;
-  installOllamaBtn.textContent = 'Install';
 });
 
 // Navigation
