@@ -947,10 +947,50 @@ async function startWorker() {
       }
     }
 
-    // Start the worker process with integrity info
-    log('Starting worker process...');
+    // Set online status BEFORE starting worker - this must succeed for worker to poll
+    log('Setting online status with server...');
     stats.status = 'Connecting...';
     sendStatusToRenderer();
+    
+    let onlineStatusSet = false;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        log(`Setting online status (attempt ${attempt}/3)...`);
+        const result = await makeRequest(`${SERVER_URL}/api/worker/set-online`, {
+          method: 'POST',
+          body: { isOnline: true }
+        });
+        
+        if (result.status === 200) {
+          log('Online status set successfully');
+          onlineStatusSet = true;
+          break;
+        } else {
+          log(`Set online failed: ${result.status} - ${JSON.stringify(result.data)}`);
+        }
+      } catch (err) {
+        log(`Set online error (attempt ${attempt}): ${err.message}`);
+      }
+      
+      if (attempt < 3) {
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
+    
+    if (!onlineStatusSet) {
+      log('ERROR: Could not set online status after 3 attempts. Worker will not be able to receive tasks.');
+      stats.status = 'Error: Could not go online';
+      stats.lastError = 'Failed to set online status with server';
+      sendStatusToRenderer();
+      updateTrayMenu();
+      showNotification('ComputeGrid Worker', 'Failed to connect to server. Please check your internet connection.');
+      return;
+    }
+    
+    isOnline = true;
+    
+    // Start the worker process with integrity info
+    log('Starting worker process...');
     
     const workerScript = getWorkerScriptPath();
     log(`Worker script path: ${workerScript}`);
@@ -1036,21 +1076,10 @@ async function startWorker() {
     });
 
     stats.status = 'Running';
-    isOnline = true;
     lastWorkerActivity = Date.now();
     
     // Start watchdog to detect unresponsive worker
     startWatchdog();
-    
-    // Update server with online status
-    try {
-      await makeRequest(`${SERVER_URL}/api/worker/set-online`, {
-        method: 'POST',
-        body: { isOnline: true }
-      });
-    } catch (err) {
-      log('Could not update online status: ' + err.message);
-    }
     
     sendStatusToRenderer();
     updateTrayMenu();
