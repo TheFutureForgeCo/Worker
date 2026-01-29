@@ -393,45 +393,57 @@ async function installOllama() {
         });
       });
     } else if (platform === 'win32') {
-      // Windows: download and run installer silently
-      const tempDir = os.tmpdir();
-      const installerPath = path.join(tempDir, 'OllamaSetup.exe');
-      
-      await downloadFile(downloadUrl, installerPath, (progress) => {
-        ollamaDownloadProgress = progress;
-        stats.ollamaStatus = `downloading... ${progress}%`;
-        sendStatusToRenderer();
-      });
-      
+      // Windows: use winget or direct download based on architecture
       stats.ollamaStatus = 'installing...';
       sendStatusToRenderer();
       
-      // Run installer silently
       return new Promise((resolve, reject) => {
-        exec(`"${installerPath}" /S`, (error) => {
-          // Clean up installer
-          fs.unlink(installerPath, () => {});
-          
-          if (error) {
-            // Try alternative installation method
-            exec(`start /wait "${installerPath}"`, (error2) => {
-              if (error2) {
-                stats.ollamaStatus = 'install failed - please install manually';
-                sendStatusToRenderer();
-                shell.openExternal('https://ollama.com/download/windows');
-                reject(error2);
-              } else {
-                stats.ollamaStatus = 'installed';
-                sendStatusToRenderer();
-                resolve(true);
-              }
-            });
-          } else {
+        // First try winget (auto-detects architecture)
+        exec('winget install Ollama.Ollama --silent --accept-package-agreements --accept-source-agreements', { timeout: 300000 }, (error) => {
+          if (!error) {
             stats.ollamaStatus = 'installed';
             ollamaDownloadProgress = 0;
             sendStatusToRenderer();
             resolve(true);
+            return;
           }
+          
+          // Fallback: download installer for correct architecture
+          const arch = process.arch; // 'x64', 'arm64', 'ia32'
+          let installerUrl = 'https://ollama.com/download/OllamaSetup.exe'; // default x64
+          if (arch === 'arm64') {
+            installerUrl = 'https://ollama.com/download/windows-arm64';
+          }
+          
+          const tempDir = os.tmpdir();
+          const installerPath = path.join(tempDir, 'OllamaSetup.exe');
+          
+          downloadFile(installerUrl, installerPath, (progress) => {
+            ollamaDownloadProgress = progress;
+            stats.ollamaStatus = `downloading AI... ${progress}%`;
+            sendStatusToRenderer();
+          }).then(() => {
+            stats.ollamaStatus = 'installing...';
+            sendStatusToRenderer();
+            
+            // Run installer silently
+            exec(`"${installerPath}" /S`, { timeout: 120000 }, (installError) => {
+              fs.unlink(installerPath, () => {});
+              
+              if (installError) {
+                // Open download page as last resort
+                stats.ollamaStatus = 'manual install required';
+                sendStatusToRenderer();
+                shell.openExternal('https://ollama.com/download/windows');
+                reject(installError);
+              } else {
+                stats.ollamaStatus = 'installed';
+                ollamaDownloadProgress = 0;
+                sendStatusToRenderer();
+                resolve(true);
+              }
+            });
+          }).catch(reject);
         });
       });
     } else if (platform === 'darwin') {
