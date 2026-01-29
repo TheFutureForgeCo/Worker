@@ -1,3 +1,19 @@
+// Window Controls (frameless window)
+const windowClose = document.getElementById('windowClose');
+const windowMinimize = document.getElementById('windowMinimize');
+const windowMaximize = document.getElementById('windowMaximize');
+
+// Setup window controls
+if (windowClose) {
+  windowClose.addEventListener('click', () => window.electronAPI.windowClose());
+}
+if (windowMinimize) {
+  windowMinimize.addEventListener('click', () => window.electronAPI.windowMinimize());
+}
+if (windowMaximize) {
+  windowMaximize.addEventListener('click', () => window.electronAPI.windowMaximize());
+}
+
 // DOM Elements - Main Page
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
