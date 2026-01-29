@@ -6,7 +6,7 @@
   "homepage": "https://computegrid.app",
   "repository": {
     "type": "git",
-    "url": "https://github.com/computegrid/worker-app.git"
+    "url": "https://github.com/TheFutureForgeCo/Worker.git"
   },
   "scripts": {
     "start": "electron .",
@@ -38,8 +38,8 @@
     ],
     "publish": {
       "provider": "github",
-      "owner": "computegrid",
-      "repo": "worker-app"
+      "owner": "TheFutureForgeCo",
+      "repo": "Worker"
     },
     "win": {
       "target": ["nsis", "portable"],
