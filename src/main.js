@@ -12,25 +12,8 @@ const { autoUpdater } = require('electron-updater');
 const gotTheLock = app.requestSingleInstanceLock();
 
 if (!gotTheLock) {
-  // Another instance is already running - quit this one
-  app.quit();
-} else {
-  // This is the first instance - handle second-instance events
-  app.on('second-instance', (event, commandLine, workingDirectory) => {
-    // Someone tried to run a second instance, focus our window instead
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) {
-        mainWindow.restore();
-      }
-      mainWindow.show();
-      mainWindow.focus();
-    } else {
-      // Window doesn't exist yet, create it
-      app.whenReady().then(() => {
-        createWindow();
-      });
-    }
-  });
+  // Another instance is already running - exit immediately
+  app.exit(0);
 }
 
 // App version and integrity
@@ -1171,6 +1154,15 @@ app.whenReady().then(() => {
   createTray();
   setupAutoStart();
   setupAutoUpdater();
+  
+  // Handle second instance - focus existing window
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
 
   console.log(`ComputeGrid Worker v${APP_VERSION} started`);
   console.log(`App signature: ${generateAppSignature()}`);
