@@ -19,12 +19,35 @@ const SERVER_URL = 'https://computegrid.replit.app';
 const CONFIG_PATH = path.join(app.getPath('userData'), 'config.json');
 const OLLAMA_HOST = 'http://127.0.0.1:11434';
 
-// Ollama download URLs
-const OLLAMA_DOWNLOAD_URLS = {
-  win32: 'https://ollama.com/download/OllamaSetup.exe',
-  darwin: 'https://ollama.com/download/Ollama-darwin.zip',
-  linux: 'https://ollama.com/install.sh'
+// Local Ollama installation paths (stored within app data, deleted on uninstall)
+const OLLAMA_DIR = path.join(app.getPath('userData'), 'ollama');
+const OLLAMA_MODELS_DIR = path.join(OLLAMA_DIR, 'models');
+const OLLAMA_BIN_DIR = path.join(OLLAMA_DIR, 'bin');
+
+// Ollama binary download URLs (direct binary, not installers)
+const OLLAMA_BINARY_URLS = {
+  win32: {
+    x64: 'https://github.com/ollama/ollama/releases/latest/download/ollama-windows-amd64.zip',
+    arm64: 'https://github.com/ollama/ollama/releases/latest/download/ollama-windows-arm64.zip'
+  },
+  linux: {
+    x64: 'https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tgz',
+    arm64: 'https://github.com/ollama/ollama/releases/latest/download/ollama-linux-arm64.tgz'
+  },
+  darwin: {
+    x64: 'https://github.com/ollama/ollama/releases/latest/download/ollama-darwin',
+    arm64: 'https://github.com/ollama/ollama/releases/latest/download/ollama-darwin'
+  }
 };
+
+// Get local Ollama binary path
+function getOllamaBinaryPath() {
+  const platform = process.platform;
+  if (platform === 'win32') {
+    return path.join(OLLAMA_BIN_DIR, 'ollama.exe');
+  }
+  return path.join(OLLAMA_BIN_DIR, 'ollama');
+}
 
 // Generate app signature for integrity verification
 function generateAppSignature() {
@@ -272,8 +295,17 @@ function sendStatusToRenderer() {
   }
 }
 
-// Check if Ollama is installed
+// Check if Ollama is installed (check local installation first, then system)
 async function checkOllama() {
+  const localBinary = getOllamaBinaryPath();
+  
+  // Check local installation first
+  if (fs.existsSync(localBinary)) {
+    stats.ollamaStatus = 'installed';
+    return true;
+  }
+  
+  // Fallback: check system installation
   return new Promise((resolve) => {
     const checkCmd = process.platform === 'win32' ? 'where ollama' : 'which ollama';
     exec(checkCmd, (error) => {
@@ -308,13 +340,38 @@ async function checkOllamaRunning() {
   });
 }
 
-// Start Ollama service
+// Start Ollama service (using local binary if available)
 async function startOllamaService() {
+  const localBinary = getOllamaBinaryPath();
+  const useLocal = fs.existsSync(localBinary);
+  
+  // Ensure models directory exists
+  if (!fs.existsSync(OLLAMA_MODELS_DIR)) {
+    fs.mkdirSync(OLLAMA_MODELS_DIR, { recursive: true });
+  }
+  
+  // Set environment for local models storage
+  const env = {
+    ...process.env,
+    OLLAMA_MODELS: OLLAMA_MODELS_DIR
+  };
+  
   return new Promise((resolve) => {
-    if (process.platform === 'win32') {
-      exec('ollama serve', { detached: true, stdio: 'ignore' });
+    if (useLocal) {
+      // Use local binary
+      const ollamaCmd = process.platform === 'win32' ? `"${localBinary}" serve` : `"${localBinary}" serve`;
+      spawn(localBinary, ['serve'], { 
+        detached: true, 
+        stdio: 'ignore',
+        env 
+      }).unref();
     } else {
-      exec('ollama serve &', { detached: true, stdio: 'ignore' });
+      // Fall back to system installation
+      if (process.platform === 'win32') {
+        exec('ollama serve', { detached: true, stdio: 'ignore', env });
+      } else {
+        exec('ollama serve &', { detached: true, stdio: 'ignore', env });
+      }
     }
     // Wait for service to start
     setTimeout(() => resolve(true), 3000);
@@ -358,116 +415,58 @@ function downloadFile(url, destPath, progressCallback) {
   });
 }
 
-// Install Ollama with automatic download
+// Install Ollama locally within app data (deleted when app is uninstalled)
 async function installOllama() {
-  stats.ollamaStatus = 'downloading...';
+  stats.ollamaStatus = 'downloading AI...';
   ollamaDownloadProgress = 0;
   sendStatusToRenderer();
 
   const platform = process.platform;
-  const downloadUrl = OLLAMA_DOWNLOAD_URLS[platform];
+  const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
   
-  if (!downloadUrl) {
+  // Get download URL for this platform/arch
+  const platformUrls = OLLAMA_BINARY_URLS[platform];
+  if (!platformUrls) {
     stats.ollamaStatus = 'unsupported platform';
     sendStatusToRenderer();
     return false;
   }
+  
+  const downloadUrl = platformUrls[arch];
+  
+  // Create directories
+  if (!fs.existsSync(OLLAMA_BIN_DIR)) {
+    fs.mkdirSync(OLLAMA_BIN_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(OLLAMA_MODELS_DIR)) {
+    fs.mkdirSync(OLLAMA_MODELS_DIR, { recursive: true });
+  }
 
   try {
-    if (platform === 'linux') {
-      // Linux: use curl install script
-      stats.ollamaStatus = 'installing...';
-      sendStatusToRenderer();
-      
-      return new Promise((resolve, reject) => {
-        exec('curl -fsSL https://ollama.com/install.sh | sh', (error) => {
-          if (error) {
-            stats.ollamaStatus = 'install failed';
-            sendStatusToRenderer();
-            reject(error);
-          } else {
-            stats.ollamaStatus = 'installed';
-            sendStatusToRenderer();
-            resolve(true);
-          }
-        });
-      });
-    } else if (platform === 'win32') {
-      // Windows: use winget or direct download based on architecture
-      stats.ollamaStatus = 'installing...';
-      sendStatusToRenderer();
-      
-      return new Promise((resolve, reject) => {
-        // First try winget (auto-detects architecture)
-        exec('winget install Ollama.Ollama --silent --accept-package-agreements --accept-source-agreements', { timeout: 300000 }, (error) => {
-          if (!error) {
-            stats.ollamaStatus = 'installed';
-            ollamaDownloadProgress = 0;
-            sendStatusToRenderer();
-            resolve(true);
-            return;
-          }
-          
-          // Fallback: download installer for correct architecture
-          const arch = process.arch; // 'x64', 'arm64', 'ia32'
-          let installerUrl = 'https://ollama.com/download/OllamaSetup.exe'; // default x64
-          if (arch === 'arm64') {
-            installerUrl = 'https://ollama.com/download/windows-arm64';
-          }
-          
-          const tempDir = os.tmpdir();
-          const installerPath = path.join(tempDir, 'OllamaSetup.exe');
-          
-          downloadFile(installerUrl, installerPath, (progress) => {
-            ollamaDownloadProgress = progress;
-            stats.ollamaStatus = `downloading AI... ${progress}%`;
-            sendStatusToRenderer();
-          }).then(() => {
-            stats.ollamaStatus = 'installing...';
-            sendStatusToRenderer();
-            
-            // Run installer silently
-            exec(`"${installerPath}" /S`, { timeout: 120000 }, (installError) => {
-              fs.unlink(installerPath, () => {});
-              
-              if (installError) {
-                // Open download page as last resort
-                stats.ollamaStatus = 'manual install required';
-                sendStatusToRenderer();
-                shell.openExternal('https://ollama.com/download/windows');
-                reject(installError);
-              } else {
-                stats.ollamaStatus = 'installed';
-                ollamaDownloadProgress = 0;
-                sendStatusToRenderer();
-                resolve(true);
-              }
-            });
-          }).catch(reject);
-        });
-      });
-    } else if (platform === 'darwin') {
-      // macOS: download zip and extract
-      const tempDir = os.tmpdir();
-      const zipPath = path.join(tempDir, 'Ollama.zip');
+    const tempDir = os.tmpdir();
+    const ollamaBinary = getOllamaBinaryPath();
+    
+    if (platform === 'win32') {
+      // Windows: download zip and extract
+      const zipPath = path.join(tempDir, 'ollama-windows.zip');
       
       await downloadFile(downloadUrl, zipPath, (progress) => {
         ollamaDownloadProgress = progress;
-        stats.ollamaStatus = `downloading... ${progress}%`;
+        stats.ollamaStatus = `downloading AI... ${progress}%`;
         sendStatusToRenderer();
       });
       
-      stats.ollamaStatus = 'installing...';
+      stats.ollamaStatus = 'extracting...';
       sendStatusToRenderer();
       
+      // Extract using PowerShell
       return new Promise((resolve, reject) => {
-        exec(`unzip -o "${zipPath}" -d /Applications && open /Applications/Ollama.app`, (error) => {
+        exec(`powershell -command "Expand-Archive -Path '${zipPath}' -DestinationPath '${OLLAMA_BIN_DIR}' -Force"`, (error) => {
           fs.unlink(zipPath, () => {});
           
           if (error) {
             stats.ollamaStatus = 'install failed';
             sendStatusToRenderer();
-            shell.openExternal('https://ollama.com/download/mac');
             reject(error);
           } else {
             stats.ollamaStatus = 'installed';
@@ -477,6 +476,51 @@ async function installOllama() {
           }
         });
       });
+      
+    } else if (platform === 'linux') {
+      // Linux: download tgz and extract
+      const tgzPath = path.join(tempDir, 'ollama-linux.tgz');
+      
+      await downloadFile(downloadUrl, tgzPath, (progress) => {
+        ollamaDownloadProgress = progress;
+        stats.ollamaStatus = `downloading AI... ${progress}%`;
+        sendStatusToRenderer();
+      });
+      
+      stats.ollamaStatus = 'extracting...';
+      sendStatusToRenderer();
+      
+      return new Promise((resolve, reject) => {
+        exec(`tar -xzf "${tgzPath}" -C "${OLLAMA_BIN_DIR}" && chmod +x "${ollamaBinary}"`, (error) => {
+          fs.unlink(tgzPath, () => {});
+          
+          if (error) {
+            stats.ollamaStatus = 'install failed';
+            sendStatusToRenderer();
+            reject(error);
+          } else {
+            stats.ollamaStatus = 'installed';
+            ollamaDownloadProgress = 0;
+            sendStatusToRenderer();
+            resolve(true);
+          }
+        });
+      });
+      
+    } else if (platform === 'darwin') {
+      // macOS: download binary directly
+      await downloadFile(downloadUrl, ollamaBinary, (progress) => {
+        ollamaDownloadProgress = progress;
+        stats.ollamaStatus = `downloading AI... ${progress}%`;
+        sendStatusToRenderer();
+      });
+      
+      // Make executable
+      fs.chmodSync(ollamaBinary, 0o755);
+      stats.ollamaStatus = 'installed';
+      ollamaDownloadProgress = 0;
+      sendStatusToRenderer();
+      return true;
     }
   } catch (err) {
     console.error('Ollama installation failed:', err);
@@ -513,13 +557,22 @@ async function getOllamaModels() {
   });
 }
 
-// Pull Ollama model
+// Pull Ollama model (uses local binary if available)
 async function pullModel(modelName) {
+  const localBinary = getOllamaBinaryPath();
+  const ollamaCmd = fs.existsSync(localBinary) ? `"${localBinary}"` : 'ollama';
+  
+  // Set environment for local models storage
+  const env = {
+    ...process.env,
+    OLLAMA_MODELS: OLLAMA_MODELS_DIR
+  };
+  
   return new Promise((resolve, reject) => {
     stats.ollamaStatus = `pulling ${modelName}...`;
     sendStatusToRenderer();
 
-    exec(`ollama pull ${modelName}`, { timeout: 600000 }, (error, stdout, stderr) => {
+    exec(`${ollamaCmd} pull ${modelName}`, { timeout: 600000, env }, (error, stdout, stderr) => {
       if (error) {
         stats.ollamaStatus = `pull failed: ${error.message}`;
         sendStatusToRenderer();
@@ -658,24 +711,31 @@ function stopWorker() {
   updateTrayMenu();
 }
 
-// Clear app data
+// Clear app data (including AI and models)
 function clearAppData() {
   try {
+    // Delete config file
     if (fs.existsSync(CONFIG_PATH)) {
       fs.unlinkSync(CONFIG_PATH);
     }
+    
+    // Delete Ollama directory (binary and models)
+    if (fs.existsSync(OLLAMA_DIR)) {
+      fs.rmSync(OLLAMA_DIR, { recursive: true, force: true });
+      console.log('Deleted Ollama directory:', OLLAMA_DIR);
+    }
+    
     config = {
       apiKey: '',
       autoStart: false,
       minimizeToTray: true,
-      startMinimized: false,
-      selectedModel: 'mistral'
+      startMinimized: false
     };
     stats = {
       tasksCompleted: 0,
       earnings: '0.00',
       status: 'stopped',
-      ollamaStatus: 'checking...',
+      ollamaStatus: 'not installed',
       ollamaModels: []
     };
     sendStatusToRenderer();
