@@ -1,6 +1,6 @@
 {
   "name": "computegrid-worker",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "ComputeGrid Worker Desktop App - Earn money by sharing your computing power",
   "main": "src/main.js",
   "homepage": "https://computegrid.app",
@@ -37,8 +37,7 @@
       "assets/**/*"
     ],
     "asarUnpack": [
-      "src/worker.js",
-      "src/main.js"
+      "src/worker.js"
     ],
     "publish": {
       "provider": "github",
