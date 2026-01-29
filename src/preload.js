@@ -31,6 +31,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clearData: () => ipcRenderer.invoke('clear-data'),
   uninstallApp: () => ipcRenderer.invoke('uninstall-app'),
   
+  // Logging
+  getLogs: () => ipcRenderer.invoke('get-logs'),
+  openLogsFolder: () => ipcRenderer.invoke('open-logs-folder'),
+  
   // External links
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   
