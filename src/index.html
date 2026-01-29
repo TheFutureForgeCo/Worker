@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+  <title>ComputeGrid Worker</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --bg-primary: hsl(222, 47%, 7%);
+      --bg-secondary: hsl(222, 47%, 9%);
+      --bg-tertiary: hsl(217, 33%, 12%);
+      --bg-elevated: hsl(217, 33%, 15%);
+      --border-color: hsl(217, 33%, 17%);
+      --border-subtle: hsl(217, 33%, 12%);
+      --text-primary: hsl(210, 20%, 98%);
+      --text-secondary: hsl(215, 20%, 65%);
+      --text-muted: hsl(215, 16%, 47%);
+      --primary: hsl(199, 89%, 48%);
+      --primary-hover: hsl(199, 89%, 55%);
+      --primary-glow: hsla(199, 89%, 48%, 0.3);
+      --accent: hsl(172, 66%, 50%);
+      --accent-glow: hsla(172, 66%, 50%, 0.2);
+      --success: hsl(142, 76%, 45%);
+      --warning: hsl(43, 96%, 56%);
+      --danger: hsl(0, 72%, 51%);
+      --radius: 8px;
+      --radius-lg: 12px;
+      --transition: 150ms ease;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .header {
+      padding: 20px 24px;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-icon {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      border-radius: var(--radius);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      font-weight: 700;
+      color: white;
+      flex-shrink: 0;
+    }
+
+    .header-text {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .logo {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text-primary);
+      letter-spacing: -0.02em;
+    }
+
+    .subtitle {
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 400;
+    }
+
+    .content {
+      flex: 1;
+      padding: 20px 24px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .status-card {
+      background: var(--bg-secondary);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      border: 1px solid var(--border-subtle);
+    }
+
+    .status-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--danger);
+      box-shadow: 0 0 0 3px hsla(0, 72%, 51%, 0.2);
+      transition: all var(--transition);
+    }
+
+    .status-dot.running {
+      background: var(--success);
+      box-shadow: 0 0 0 3px hsla(142, 76%, 45%, 0.2);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; box-shadow: 0 0 0 3px hsla(142, 76%, 45%, 0.2); }
+      50% { opacity: 0.8; box-shadow: 0 0 0 6px hsla(142, 76%, 45%, 0.1); }
+    }
+
+    .status-text {
+      font-weight: 500;
+      font-size: 14px;
+      text-transform: capitalize;
+      color: var(--text-primary);
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+
+    .stat-item {
+      background: var(--bg-tertiary);
+      border-radius: var(--radius);
+      padding: 16px;
+      text-align: center;
+      border: 1px solid var(--border-subtle);
+      transition: border-color var(--transition);
+    }
+
+    .stat-item:hover {
+      border-color: var(--border-color);
+    }
+
+    .stat-value {
+      font-size: 22px;
+      font-weight: 600;
+      color: var(--primary);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .stat-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 500;
+    }
+
+    .ollama-status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      background: var(--bg-secondary);
+      border-radius: var(--radius);
+      border: 1px solid var(--border-subtle);
+    }
+
+    .ollama-status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--warning);
+      flex-shrink: 0;
+    }
+
+    .ollama-status-dot.ready {
+      background: var(--success);
+    }
+
+    .ollama-status-dot.error {
+      background: var(--danger);
+    }
+
+    .ollama-status-text {
+      font-size: 13px;
+      color: var(--text-secondary);
+      flex: 1;
+    }
+
+    .config-section {
+      background: var(--bg-secondary);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      border: 1px solid var(--border-subtle);
+    }
+
+    .section-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .input-group {
+      margin-bottom: 14px;
+    }
+
+    .input-label {
+      display: block;
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-bottom: 6px;
+      font-weight: 500;
+    }
+
+    .input-field {
+      width: 100%;
+      padding: 10px 14px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border-color);
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      font-size: 14px;
+      font-family: inherit;
+      transition: border-color var(--transition), box-shadow var(--transition);
+    }
+
+    .input-field:hover {
+      border-color: var(--text-muted);
+    }
+
+    .input-field:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px var(--primary-glow);
+    }
+
+    .input-field::placeholder {
+      color: var(--text-muted);
+    }
+
+    .checkbox-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+      cursor: pointer;
+    }
+
+    .checkbox {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--primary);
+      cursor: pointer;
+      border-radius: 4px;
+    }
+
+    .checkbox-label {
+      font-size: 13px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 4px;
+    }
+
+    .btn {
+      flex: 1;
+      padding: 12px 20px;
+      border-radius: var(--radius);
+      border: none;
+      font-size: 14px;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+      transition: all var(--transition);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .btn:active {
+      transform: scale(0.98);
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+      box-shadow: 0 2px 8px var(--primary-glow);
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: var(--primary-hover);
+      box-shadow: 0 4px 12px var(--primary-glow);
+    }
+
+    .btn-danger {
+      background: var(--danger);
+      color: white;
+      box-shadow: 0 2px 8px hsla(0, 72%, 51%, 0.3);
+    }
+
+    .btn-danger:hover:not(:disabled) {
+      background: hsl(0, 72%, 58%);
+    }
+
+    .btn-secondary {
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+      border: 1px solid var(--border-color);
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      background: var(--bg-tertiary);
+      border-color: var(--text-muted);
+    }
+
+    .btn-small {
+      padding: 6px 12px;
+      font-size: 12px;
+      flex: none;
+    }
+
+    .footer {
+      padding: 14px 24px;
+      text-align: center;
+      background: var(--bg-secondary);
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    .footer-link {
+      color: var(--primary);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 500;
+      transition: color var(--transition);
+    }
+
+    .footer-link:hover {
+      color: var(--primary-hover);
+    }
+
+    .version-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      background: var(--bg-tertiary);
+      border-radius: 20px;
+      font-size: 10px;
+      color: var(--text-muted);
+      margin-left: auto;
+      font-weight: 500;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo-icon">CG</div>
+    <div class="header-text">
+      <div class="logo">ComputeGrid</div>
+      <div class="subtitle">Worker Desktop App</div>
+    </div>
+    <span class="version-badge" id="versionBadge">v1.0.0</span>
+  </div>
+
+  <div class="content">
+    <div class="status-card">
+      <div class="status-header">
+        <div class="status-indicator">
+          <div class="status-dot" id="statusDot"></div>
+          <span class="status-text" id="statusText">Stopped</span>
+        </div>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="stat-value" id="earnings">$0.00</div>
+          <div class="stat-label">Earnings</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="tasksCompleted">0</div>
+          <div class="stat-label">Tasks Completed</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="ollama-status">
+      <div class="ollama-status-dot" id="ollamaDot"></div>
+      <span class="ollama-status-text" id="ollamaStatus">Checking Ollama...</span>
+      <button class="btn btn-secondary btn-small" id="installOllamaBtn" style="display: none;">Install</button>
+    </div>
+
+    <div class="config-section">
+      <div class="section-title">Configuration</div>
+      
+      <div class="input-group">
+        <label class="input-label" for="serverUrl">Server URL</label>
+        <input type="text" class="input-field" id="serverUrl" placeholder="https://your-computegrid-server.com">
+      </div>
+
+      <div class="input-group">
+        <label class="input-label" for="apiKey">API Key</label>
+        <input type="password" class="input-field" id="apiKey" placeholder="Enter your API key">
+      </div>
+
+      <div class="checkbox-group">
+        <input type="checkbox" class="checkbox" id="autoStart">
+        <label class="checkbox-label" for="autoStart">Start automatically on login</label>
+      </div>
+
+      <div class="checkbox-group">
+        <input type="checkbox" class="checkbox" id="minimizeToTray" checked>
+        <label class="checkbox-label" for="minimizeToTray">Minimize to tray when closed</label>
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-secondary" id="saveBtn">Save Settings</button>
+        <button class="btn btn-primary" id="startBtn">Start Worker</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <a href="#" class="footer-link" id="dashboardLink">Open Web Dashboard</a>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
