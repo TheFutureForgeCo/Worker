@@ -14,6 +14,18 @@ if (windowMaximize) {
   windowMaximize.addEventListener('click', () => window.electronAPI.windowMaximize());
 }
 
+// DOM Elements - Setup Overlay
+const setupOverlay = document.getElementById('setupOverlay');
+const setupTitle = document.getElementById('setupTitle');
+const setupSubtitle = document.getElementById('setupSubtitle');
+const setupProgressFill = document.getElementById('setupProgressFill');
+const setupProgressText = document.getElementById('setupProgressText');
+
+// DOM Elements - Error Banner
+const errorBanner = document.getElementById('errorBanner');
+const errorMessage = document.getElementById('errorMessage');
+const errorDismiss = document.getElementById('errorDismiss');
+
 // DOM Elements - Main Page
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
@@ -25,7 +37,7 @@ const ollamaProgress = document.getElementById('ollamaProgress');
 const ollamaProgressFill = document.getElementById('ollamaProgressFill');
 const apiKey = document.getElementById('apiKey');
 const saveBtn = document.getElementById('saveBtn');
-const startBtn = document.getElementById('startBtn');
+const onlineToggleBtn = document.getElementById('onlineToggleBtn');
 const dashboardLink = document.getElementById('dashboardLink');
 const getApiKeyLink = document.getElementById('getApiKeyLink');
 const versionBadge = document.getElementById('versionBadge');
@@ -54,7 +66,7 @@ const mainPage = document.getElementById('mainPage');
 const settingsPage = document.getElementById('settingsPage');
 const aboutPage = document.getElementById('aboutPage');
 
-let isRunning = false;
+let isOnline = false;
 let currentConfig = {};
 let serverUrl = '';
 
@@ -70,18 +82,6 @@ function formatTasks(count) {
   return num.toLocaleString();
 }
 
-// Format bytes to human readable
-function formatBytes(bytes) {
-  if (!bytes) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let i = 0;
-  while (bytes >= 1024 && i < units.length - 1) {
-    bytes /= 1024;
-    i++;
-  }
-  return `${bytes.toFixed(1)} ${units[i]}`;
-}
-
 // Navigate between pages
 function showPage(pageId) {
   [mainPage, settingsPage, aboutPage].forEach(page => {
@@ -92,6 +92,59 @@ function showPage(pageId) {
   
   // Update settings icon state
   settingsBtn.classList.toggle('active', pageId === 'settingsPage');
+}
+
+// Show/hide setup overlay
+function updateSetupOverlay(status) {
+  const { setupPhase, setupProgress } = status;
+  
+  if (setupPhase) {
+    setupOverlay.classList.add('active');
+    
+    let title = 'Setting Up AI';
+    let subtitle = 'This may take a few minutes on first run';
+    let progressText = 'Preparing...';
+    
+    switch (setupPhase) {
+      case 'downloading-ollama':
+        title = 'Downloading AI Engine';
+        subtitle = 'Installing Ollama for local AI processing';
+        progressText = setupProgress ? `${setupProgress}% complete` : 'Starting download...';
+        break;
+      case 'extracting':
+        title = 'Installing AI Engine';
+        subtitle = 'Extracting files...';
+        progressText = 'Almost done...';
+        break;
+      case 'downloading-model':
+        title = 'Downloading AI Model';
+        subtitle = 'This enables local AI responses';
+        progressText = setupProgress ? `${setupProgress}% complete` : 'Starting download...';
+        break;
+      case 'starting-service':
+        title = 'Starting AI Service';
+        subtitle = 'Preparing to process tasks';
+        progressText = 'Starting...';
+        break;
+    }
+    
+    setupTitle.textContent = title;
+    setupSubtitle.textContent = subtitle;
+    setupProgressFill.style.width = `${setupProgress || 0}%`;
+    setupProgressText.textContent = progressText;
+  } else {
+    setupOverlay.classList.remove('active');
+  }
+}
+
+// Show/hide error banner
+function updateErrorBanner(lastError) {
+  if (lastError) {
+    errorBanner.classList.add('visible');
+    errorMessage.textContent = lastError;
+  } else {
+    errorBanner.classList.remove('visible');
+  }
 }
 
 // Initialize
@@ -119,23 +172,32 @@ async function init() {
 
 // Update UI with status
 function updateUI(status) {
-  isRunning = status.isRunning;
+  isOnline = status.isOnline;
   currentConfig = status.config;
   
-  // Update status indicator
-  if (isRunning) {
-    statusDot.classList.add('running');
-    statusText.textContent = status.stats.status || 'Running';
-    startBtn.textContent = 'Stop Worker';
-    startBtn.classList.remove('btn-primary');
-    startBtn.classList.add('btn-danger');
+  // Update setup overlay
+  updateSetupOverlay(status);
+  
+  // Update error banner
+  updateErrorBanner(status.lastError);
+  
+  // Update online status indicator
+  if (isOnline) {
+    statusDot.classList.add('online');
+    statusText.textContent = status.stats.status || 'Online';
+    onlineToggleBtn.textContent = 'Go Offline';
+    onlineToggleBtn.classList.remove('go-online');
+    onlineToggleBtn.classList.add('go-offline');
   } else {
-    statusDot.classList.remove('running');
-    statusText.textContent = 'Stopped';
-    startBtn.textContent = 'Start Worker';
-    startBtn.classList.remove('btn-danger');
-    startBtn.classList.add('btn-primary');
+    statusDot.classList.remove('online');
+    statusText.textContent = status.stats.status || 'Offline';
+    onlineToggleBtn.textContent = 'Go Online';
+    onlineToggleBtn.classList.remove('go-offline');
+    onlineToggleBtn.classList.add('go-online');
   }
+  
+  // Disable online button if no API key
+  onlineToggleBtn.disabled = !currentConfig.apiKey || status.setupPhase;
   
   // Update stats with formatting
   earnings.textContent = formatEarnings(status.stats.earnings);
@@ -153,7 +215,7 @@ function updateUI(status) {
 // Check Ollama status
 async function checkOllamaStatus() {
   const installed = await window.electronAPI.checkOllama();
-  updateOllamaUI(installed ? 'installed' : 'not installed', 0);
+  updateOllamaUI(installed ? 'AI Ready' : 'AI not installed', 0);
 }
 
 // Update Ollama UI
@@ -161,11 +223,12 @@ function updateOllamaUI(status, progress = 0) {
   // Show AI status in a user-friendly way
   let displayStatus = status;
   if (status === 'checking...') displayStatus = 'Checking AI...';
-  else if (status === 'downloading AI...') displayStatus = 'Downloading AI...';
-  else if (status === 'downloading AI model...') displayStatus = 'Downloading AI model...';
-  else if (status === 'starting AI service...') displayStatus = 'Starting AI...';
-  else if (status === 'installed' || status === 'ready') displayStatus = 'AI Ready';
+  else if (status === 'not installed') displayStatus = 'AI not installed';
+  else if (status === 'installed' || status === 'ready' || status === 'AI Ready') displayStatus = 'AI Ready';
+  else if (status === 'AI Engine Installed') displayStatus = 'AI Engine Installed';
   else if (status.includes('ready')) displayStatus = 'AI Ready';
+  else if (status.includes('Downloading')) displayStatus = status;
+  else if (status.includes('Extracting')) displayStatus = status;
   
   ollamaStatus.textContent = displayStatus;
   
@@ -177,13 +240,13 @@ function updateOllamaUI(status, progress = 0) {
     ollamaProgress.style.display = 'none';
   }
   
-  if (status === 'installed' || status.includes('ready')) {
+  if (status === 'installed' || status.includes('Ready') || status.includes('ready') || status === 'AI Engine Installed') {
     ollamaDot.classList.add('ready');
     ollamaDot.classList.remove('error');
-  } else if (status.includes('failed')) {
+  } else if (status.includes('failed') || status.includes('error')) {
     ollamaDot.classList.remove('ready');
     ollamaDot.classList.add('error');
-  } else if (status.includes('downloading') || status.includes('installing') || status.includes('starting')) {
+  } else if (status.includes('Downloading') || status.includes('Extracting') || status.includes('Starting')) {
     ollamaDot.classList.remove('ready', 'error');
   } else {
     ollamaDot.classList.remove('ready', 'error');
@@ -213,6 +276,11 @@ async function loadAboutInfo() {
   document.getElementById('aboutServer').textContent = info.serverUrl;
 }
 
+// Event handlers - Error banner
+errorDismiss.addEventListener('click', () => {
+  errorBanner.classList.remove('visible');
+});
+
 // Event handlers - Main Page
 saveBtn.addEventListener('click', async () => {
   saveBtn.disabled = true;
@@ -230,27 +298,29 @@ saveBtn.addEventListener('click', async () => {
     saveBtn.disabled = false;
     saveBtn.textContent = 'Save';
   }, 1500);
+  
+  // Refresh status to update button state
+  const status = await window.electronAPI.getStatus();
+  updateUI(status);
 });
 
-startBtn.addEventListener('click', async () => {
-  startBtn.disabled = true;
+// Online toggle button
+onlineToggleBtn.addEventListener('click', async () => {
+  onlineToggleBtn.disabled = true;
   
-  if (isRunning) {
-    await window.electronAPI.stopWorker();
-  } else {
-    // Save config first
-    if (apiKey.value) {
-      await window.electronAPI.saveConfig({
-        apiKey: apiKey.value,
-        autoStart: currentConfig.autoStart,
-        minimizeToTray: currentConfig.minimizeToTray,
-        startMinimized: currentConfig.startMinimized
-      });
-    }
-    await window.electronAPI.startWorker();
+  // Save config first if API key entered
+  if (apiKey.value) {
+    await window.electronAPI.saveConfig({
+      apiKey: apiKey.value,
+      autoStart: currentConfig.autoStart,
+      minimizeToTray: currentConfig.minimizeToTray,
+      startMinimized: currentConfig.startMinimized
+    });
   }
   
-  startBtn.disabled = false;
+  await window.electronAPI.toggleOnline();
+  
+  onlineToggleBtn.disabled = false;
 });
 
 // Navigation
@@ -309,7 +379,7 @@ checkUpdatesBtn.addEventListener('click', async () => {
 });
 
 clearDataBtn.addEventListener('click', async () => {
-  if (confirm('This will reset all settings and clear stored data. Continue?')) {
+  if (confirm('This will reset all settings and clear stored data including AI models. Continue?')) {
     await window.electronAPI.clearData();
     apiKey.value = '';
     alert('App data cleared. Please restart the application.');

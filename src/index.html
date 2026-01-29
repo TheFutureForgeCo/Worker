@@ -193,6 +193,130 @@
       gap: 14px;
     }
 
+    /* Setup Overlay - Full screen progress display */
+    .setup-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: var(--bg-primary);
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      padding: 40px;
+    }
+
+    .setup-overlay.active {
+      display: flex;
+    }
+
+    .setup-icon {
+      width: 80px;
+      height: 80px;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+      font-weight: 700;
+      color: white;
+      margin-bottom: 32px;
+      animation: pulse-glow 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse-glow {
+      0%, 100% { box-shadow: 0 0 20px var(--primary-glow); }
+      50% { box-shadow: 0 0 40px var(--primary-glow), 0 0 60px var(--accent-glow); }
+    }
+
+    .setup-title {
+      font-size: 24px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 8px;
+      text-align: center;
+    }
+
+    .setup-subtitle {
+      font-size: 14px;
+      color: var(--text-secondary);
+      margin-bottom: 40px;
+      text-align: center;
+    }
+
+    .setup-progress-container {
+      width: 100%;
+      max-width: 320px;
+    }
+
+    .setup-progress-bar {
+      height: 8px;
+      background: var(--bg-tertiary);
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 16px;
+    }
+
+    .setup-progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--primary), var(--accent));
+      border-radius: 4px;
+      transition: width 0.3s ease;
+      width: 0%;
+    }
+
+    .setup-progress-text {
+      text-align: center;
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+
+    /* Error Banner */
+    .error-banner {
+      display: none;
+      background: hsla(0, 72%, 51%, 0.15);
+      border: 1px solid var(--danger);
+      border-radius: var(--radius);
+      padding: 12px 16px;
+      margin-bottom: 14px;
+    }
+
+    .error-banner.visible {
+      display: block;
+    }
+
+    .error-banner-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--danger);
+      margin-bottom: 4px;
+    }
+
+    .error-banner-message {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .error-banner-dismiss {
+      float: right;
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 18px;
+      line-height: 1;
+      padding: 0;
+      margin-top: -4px;
+    }
+
+    .error-banner-dismiss:hover {
+      color: var(--text-primary);
+    }
+
     .status-card {
       background: var(--bg-secondary);
       border-radius: var(--radius-lg);
@@ -222,7 +346,7 @@
       transition: all var(--transition);
     }
 
-    .status-dot.running {
+    .status-dot.online {
       background: var(--success);
       box-shadow: 0 0 0 3px hsla(142, 76%, 45%, 0.2);
       animation: pulse 2s infinite;
@@ -238,6 +362,46 @@
       font-size: 14px;
       text-transform: capitalize;
       color: var(--text-primary);
+    }
+
+    /* Online Toggle Button */
+    .online-toggle-btn {
+      padding: 8px 16px;
+      border-radius: var(--radius);
+      border: none;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all var(--transition);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .online-toggle-btn.go-online {
+      background: var(--success);
+      color: white;
+    }
+
+    .online-toggle-btn.go-online:hover {
+      background: hsl(142, 76%, 50%);
+    }
+
+    .online-toggle-btn.go-offline {
+      background: var(--bg-tertiary);
+      color: var(--text-secondary);
+      border: 1px solid var(--border-color);
+    }
+
+    .online-toggle-btn.go-offline:hover {
+      background: var(--danger);
+      color: white;
+      border-color: var(--danger);
+    }
+
+    .online-toggle-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
     }
 
     .stats-grid {
@@ -388,29 +552,6 @@
       cursor: default;
     }
 
-    .checkbox-group {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 10px;
-      cursor: pointer;
-    }
-
-    .checkbox {
-      width: 18px;
-      height: 18px;
-      accent-color: var(--primary);
-      cursor: pointer;
-      border-radius: 4px;
-    }
-
-    .checkbox-label {
-      font-size: 13px;
-      color: var(--text-secondary);
-      cursor: pointer;
-      user-select: none;
-    }
-
     .actions {
       display: flex;
       gap: 10px;
@@ -473,20 +614,6 @@
     .btn-secondary:hover:not(:disabled) {
       background: var(--bg-tertiary);
       border-color: var(--text-muted);
-    }
-
-    .btn-small {
-      padding: 6px 12px;
-      font-size: 11px;
-      flex: none;
-    }
-
-    .btn-icon {
-      width: 28px;
-      height: 28px;
-      padding: 0;
-      flex: none;
-      font-size: 14px;
     }
 
     .footer {
@@ -628,55 +755,6 @@
       transform: translateX(20px);
     }
 
-    /* Model management */
-    .model-list {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-
-    .model-item {
-      display: flex;
-      align-items: center;
-      padding: 10px 12px;
-      background: var(--bg-tertiary);
-      border-radius: var(--radius);
-      border: 1px solid var(--border-subtle);
-      gap: 10px;
-    }
-
-    .model-item-info {
-      flex: 1;
-    }
-
-    .model-item-name {
-      font-size: 13px;
-      font-weight: 500;
-      color: var(--text-primary);
-    }
-
-    .model-item-size {
-      font-size: 11px;
-      color: var(--text-muted);
-    }
-
-    .model-select {
-      width: 100%;
-      padding: 10px 12px;
-      border-radius: var(--radius);
-      border: 1px solid var(--border-color);
-      background: var(--bg-tertiary);
-      color: var(--text-primary);
-      font-size: 13px;
-      font-family: inherit;
-      cursor: pointer;
-    }
-
-    .model-select:focus {
-      outline: none;
-      border-color: var(--primary);
-    }
-
     /* About section */
     .about-info {
       display: flex;
@@ -729,6 +807,19 @@
   </style>
 </head>
 <body>
+  <!-- Setup Overlay -->
+  <div class="setup-overlay" id="setupOverlay">
+    <div class="setup-icon">CG</div>
+    <div class="setup-title" id="setupTitle">Setting Up AI</div>
+    <div class="setup-subtitle" id="setupSubtitle">This may take a few minutes on first run</div>
+    <div class="setup-progress-container">
+      <div class="setup-progress-bar">
+        <div class="setup-progress-fill" id="setupProgressFill"></div>
+      </div>
+      <div class="setup-progress-text" id="setupProgressText">Preparing...</div>
+    </div>
+  </div>
+
   <div class="header">
     <div class="window-controls">
       <button class="window-btn minimize" id="windowMinimize" title="Minimize">
@@ -755,12 +846,22 @@
   <!-- Main Page -->
   <div class="page active" id="mainPage">
     <div class="content">
+      <!-- Error Banner -->
+      <div class="error-banner" id="errorBanner">
+        <button class="error-banner-dismiss" id="errorDismiss">&times;</button>
+        <div class="error-banner-title">Error</div>
+        <div class="error-banner-message" id="errorMessage"></div>
+      </div>
+
       <div class="status-card">
         <div class="status-header">
           <div class="status-indicator">
             <div class="status-dot" id="statusDot"></div>
-            <span class="status-text" id="statusText">Stopped</span>
+            <span class="status-text" id="statusText">Offline</span>
           </div>
+          <button class="online-toggle-btn go-online" id="onlineToggleBtn" data-testid="button-online-toggle">
+            Go Online
+          </button>
         </div>
         <div class="stats-grid">
           <div class="stat-item">
@@ -789,13 +890,12 @@
         
         <div class="input-group">
           <label class="input-label" for="apiKey">API Key</label>
-          <input type="password" class="input-field" id="apiKey" placeholder="Enter your API key from the dashboard">
+          <input type="password" class="input-field" id="apiKey" placeholder="Enter your API key from the dashboard" data-testid="input-api-key">
           <div class="input-hint">Get your API key from the <a href="#" id="getApiKeyLink" style="color: var(--primary);">web dashboard</a></div>
         </div>
 
         <div class="actions">
-          <button class="btn btn-secondary" id="saveBtn">Save</button>
-          <button class="btn btn-primary" id="startBtn">Start Worker</button>
+          <button class="btn btn-secondary" id="saveBtn" data-testid="button-save">Save</button>
         </div>
       </div>
     </div>
@@ -853,12 +953,12 @@
           <div class="settings-item-icon">&#128465;</div>
           <div class="settings-item-content">
             <div class="settings-item-title">Clear app data</div>
-            <div class="settings-item-subtitle">Reset settings and stored data</div>
+            <div class="settings-item-subtitle">Reset all settings and remove AI</div>
           </div>
           <div class="settings-item-action">&rsaquo;</div>
         </div>
         <div class="settings-item" id="aboutBtn">
-          <div class="settings-item-icon">&#8505;</div>
+          <div class="settings-item-icon">&#9432;</div>
           <div class="settings-item-content">
             <div class="settings-item-title">About</div>
             <div class="settings-item-subtitle">Version and system info</div>
@@ -869,10 +969,10 @@
 
       <div class="settings-group">
         <div class="settings-item danger" id="uninstallBtn">
-          <div class="settings-item-icon">&#10060;</div>
+          <div class="settings-item-icon">&#128465;</div>
           <div class="settings-item-content">
             <div class="settings-item-title">Uninstall</div>
-            <div class="settings-item-subtitle">Remove ComputeGrid Worker</div>
+            <div class="settings-item-subtitle">Remove app and all data</div>
           </div>
           <div class="settings-item-action">&rsaquo;</div>
         </div>
@@ -886,8 +986,8 @@
       <button class="back-btn" id="aboutBackBtn">&larr; Back</button>
       <div class="page-title">About</div>
 
-      <div class="config-section">
-        <div class="about-info" id="aboutInfo">
+      <div class="settings-group">
+        <div class="about-info">
           <div class="about-row">
             <span class="about-label">Version</span>
             <span class="about-value" id="aboutVersion">-</span>
@@ -915,11 +1015,9 @@
         </div>
       </div>
 
-      <div class="config-section">
-        <div class="actions">
-          <button class="btn btn-secondary" id="openGithubBtn">View on GitHub</button>
-        </div>
-      </div>
+      <button class="btn btn-secondary" id="openGithubBtn" style="margin-top: 16px;">
+        View on GitHub
+      </button>
     </div>
   </div>
 

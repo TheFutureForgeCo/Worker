@@ -68,7 +68,7 @@ function generateAppSignature() {
     const combined = workerContent + mainContent + APP_VERSION;
     return crypto.createHash('sha256').update(combined).digest('hex').substring(0, 16);
   } catch (err) {
-    console.error('Failed to generate signature:', err);
+    logError('Failed to generate signature', err);
     return 'unknown';
   }
 }
@@ -101,6 +101,24 @@ let stats = {
   ollamaModels: []
 };
 let ollamaDownloadProgress = 0;
+let setupPhase = null; // null, 'downloading-ollama', 'downloading-model', 'starting-service'
+let setupProgress = 0;
+let lastError = null;
+let isOnline = false;
+
+// Logging functions
+function log(message) {
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] ${message}`);
+}
+
+function logError(message, error) {
+  const timestamp = new Date().toISOString();
+  const errorMsg = error ? `${message}: ${error.message || error}` : message;
+  console.error(`[${timestamp}] ERROR: ${errorMsg}`);
+  lastError = errorMsg;
+  sendStatusToRenderer();
+}
 
 // Load configuration
 function loadConfig() {
@@ -108,9 +126,10 @@ function loadConfig() {
     if (fs.existsSync(CONFIG_PATH)) {
       const data = fs.readFileSync(CONFIG_PATH, 'utf8');
       config = { ...config, ...JSON.parse(data) };
+      log('Config loaded successfully');
     }
   } catch (err) {
-    console.error('Failed to load config:', err);
+    logError('Failed to load config', err);
   }
 }
 
@@ -118,8 +137,9 @@ function loadConfig() {
 function saveConfig() {
   try {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+    log('Config saved');
   } catch (err) {
-    console.error('Failed to save config:', err);
+    logError('Failed to save config', err);
   }
 }
 
@@ -226,7 +246,7 @@ function updateTrayMenu() {
 
   const contextMenu = Menu.buildFromTemplate([
     {
-      label: `Status: ${stats.status}`,
+      label: `Status: ${isOnline ? 'Online' : 'Offline'}`,
       enabled: false
     },
     {
@@ -239,13 +259,9 @@ function updateTrayMenu() {
     },
     { type: 'separator' },
     {
-      label: isWorkerRunning ? 'Stop Worker' : 'Start Worker',
+      label: isOnline ? 'Go Offline' : 'Go Online',
       click: () => {
-        if (isWorkerRunning) {
-          stopWorker();
-        } else {
-          startWorker();
-        }
+        toggleOnlineStatus();
       }
     },
     {
@@ -281,7 +297,7 @@ function updateTrayMenu() {
   ]);
 
   tray.setContextMenu(contextMenu);
-  tray.setToolTip(`ComputeGrid Worker - ${stats.status} | ${stats.earnings} tokens`);
+  tray.setToolTip(`ComputeGrid Worker - ${isOnline ? 'Online' : 'Offline'} | ${stats.earnings} tokens`);
 }
 
 // Show notification
@@ -296,6 +312,7 @@ function sendStatusToRenderer() {
   if (mainWindow && mainWindow.webContents) {
     mainWindow.webContents.send('status-update', {
       isRunning: isWorkerRunning,
+      isOnline,
       stats,
       config: {
         apiKey: config.apiKey ? '***' + config.apiKey.slice(-6) : '',
@@ -304,7 +321,10 @@ function sendStatusToRenderer() {
         minimizeToTray: config.minimizeToTray,
         startMinimized: config.startMinimized
       },
-      ollamaDownloadProgress
+      ollamaDownloadProgress,
+      setupPhase,
+      setupProgress,
+      lastError
     });
   }
 }
@@ -316,18 +336,21 @@ async function checkOllama() {
   // Check local installation first
   if (fs.existsSync(localBinary)) {
     stats.ollamaStatus = 'installed';
+    log('Ollama found at: ' + localBinary);
     return true;
   }
   
   // Fallback: check system installation
   return new Promise((resolve) => {
     const checkCmd = process.platform === 'win32' ? 'where ollama' : 'which ollama';
-    exec(checkCmd, (error) => {
+    exec(checkCmd, (error, stdout) => {
       if (error) {
         stats.ollamaStatus = 'not installed';
+        log('Ollama not found');
         resolve(false);
       } else {
         stats.ollamaStatus = 'installed';
+        log('Ollama found in system PATH: ' + stdout.trim());
         resolve(true);
       }
     });
@@ -343,6 +366,7 @@ async function checkOllamaRunning() {
       res.on('end', () => {
         try {
           const info = JSON.parse(data);
+          log('Ollama service is running: ' + JSON.stringify(info));
           resolve(true);
         } catch {
           resolve(false);
@@ -359,6 +383,11 @@ async function startOllamaService() {
   const localBinary = getOllamaBinaryPath();
   const useLocal = fs.existsSync(localBinary);
   
+  log('Starting Ollama service...');
+  setupPhase = 'starting-service';
+  setupProgress = 0;
+  sendStatusToRenderer();
+  
   // Ensure models directory exists
   if (!fs.existsSync(OLLAMA_MODELS_DIR)) {
     fs.mkdirSync(OLLAMA_MODELS_DIR, { recursive: true });
@@ -373,7 +402,7 @@ async function startOllamaService() {
   return new Promise((resolve) => {
     if (useLocal) {
       // Use local binary
-      const ollamaCmd = process.platform === 'win32' ? `"${localBinary}" serve` : `"${localBinary}" serve`;
+      log('Using local Ollama binary: ' + localBinary);
       spawn(localBinary, ['serve'], { 
         detached: true, 
         stdio: 'ignore',
@@ -381,6 +410,7 @@ async function startOllamaService() {
       }).unref();
     } else {
       // Fall back to system installation
+      log('Using system Ollama');
       if (process.platform === 'win32') {
         exec('ollama serve', { detached: true, stdio: 'ignore', env });
       } else {
@@ -388,7 +418,11 @@ async function startOllamaService() {
       }
     }
     // Wait for service to start
-    setTimeout(() => resolve(true), 3000);
+    setTimeout(() => {
+      setupPhase = null;
+      sendStatusToRenderer();
+      resolve(true);
+    }, 3000);
   });
 }
 
@@ -467,7 +501,10 @@ function downloadFile(url, destPath, progressCallback) {
 
 // Install Ollama locally within app data (deleted when app is uninstalled)
 async function installOllama() {
-  stats.ollamaStatus = 'downloading AI...';
+  log('Installing Ollama...');
+  setupPhase = 'downloading-ollama';
+  setupProgress = 0;
+  stats.ollamaStatus = 'Downloading AI Engine...';
   ollamaDownloadProgress = 0;
   sendStatusToRenderer();
 
@@ -477,12 +514,16 @@ async function installOllama() {
   // Get download URL for this platform/arch
   const platformUrls = OLLAMA_BINARY_URLS[platform];
   if (!platformUrls) {
+    const errorMsg = `Unsupported platform: ${platform}`;
+    logError(errorMsg);
     stats.ollamaStatus = 'unsupported platform';
+    setupPhase = null;
     sendStatusToRenderer();
     return false;
   }
   
   const downloadUrl = platformUrls[arch];
+  log(`Downloading from: ${downloadUrl}`);
   
   // Create directories
   if (!fs.existsSync(OLLAMA_BIN_DIR)) {
@@ -502,25 +543,32 @@ async function installOllama() {
       
       await downloadFile(downloadUrl, zipPath, (progress) => {
         ollamaDownloadProgress = progress;
-        stats.ollamaStatus = `downloading AI... ${progress}%`;
+        setupProgress = progress;
+        stats.ollamaStatus = `Downloading AI Engine... ${progress}%`;
         sendStatusToRenderer();
       });
       
-      stats.ollamaStatus = 'extracting...';
+      stats.ollamaStatus = 'Extracting AI Engine...';
+      setupPhase = 'extracting';
       sendStatusToRenderer();
+      log('Extracting Ollama...');
       
       // Extract using PowerShell
       return new Promise((resolve, reject) => {
-        exec(`powershell -command "Expand-Archive -Path '${zipPath}' -DestinationPath '${OLLAMA_BIN_DIR}' -Force"`, (error) => {
+        exec(`powershell -command "Expand-Archive -Path '${zipPath}' -DestinationPath '${OLLAMA_BIN_DIR}' -Force"`, (error, stdout, stderr) => {
           fs.unlink(zipPath, () => {});
           
           if (error) {
-            stats.ollamaStatus = 'install failed';
+            logError('Extraction failed', error);
+            stats.ollamaStatus = 'Install failed';
+            setupPhase = null;
             sendStatusToRenderer();
             reject(error);
           } else {
-            stats.ollamaStatus = 'installed';
+            log('Ollama extracted successfully');
+            stats.ollamaStatus = 'AI Engine Installed';
             ollamaDownloadProgress = 0;
+            setupPhase = null;
             sendStatusToRenderer();
             resolve(true);
           }
@@ -533,24 +581,31 @@ async function installOllama() {
       
       await downloadFile(downloadUrl, tgzPath, (progress) => {
         ollamaDownloadProgress = progress;
-        stats.ollamaStatus = `downloading AI... ${progress}%`;
+        setupProgress = progress;
+        stats.ollamaStatus = `Downloading AI Engine... ${progress}%`;
         sendStatusToRenderer();
       });
       
-      stats.ollamaStatus = 'extracting...';
+      stats.ollamaStatus = 'Extracting AI Engine...';
+      setupPhase = 'extracting';
       sendStatusToRenderer();
+      log('Extracting Ollama...');
       
       return new Promise((resolve, reject) => {
         exec(`tar -xzf "${tgzPath}" -C "${OLLAMA_BIN_DIR}" && chmod +x "${ollamaBinary}"`, (error) => {
           fs.unlink(tgzPath, () => {});
           
           if (error) {
-            stats.ollamaStatus = 'install failed';
+            logError('Extraction failed', error);
+            stats.ollamaStatus = 'Install failed';
+            setupPhase = null;
             sendStatusToRenderer();
             reject(error);
           } else {
-            stats.ollamaStatus = 'installed';
+            log('Ollama extracted successfully');
+            stats.ollamaStatus = 'AI Engine Installed';
             ollamaDownloadProgress = 0;
+            setupPhase = null;
             sendStatusToRenderer();
             resolve(true);
           }
@@ -561,21 +616,25 @@ async function installOllama() {
       // macOS: download binary directly
       await downloadFile(downloadUrl, ollamaBinary, (progress) => {
         ollamaDownloadProgress = progress;
-        stats.ollamaStatus = `downloading AI... ${progress}%`;
+        setupProgress = progress;
+        stats.ollamaStatus = `Downloading AI Engine... ${progress}%`;
         sendStatusToRenderer();
       });
       
       // Make executable
       fs.chmodSync(ollamaBinary, 0o755);
-      stats.ollamaStatus = 'installed';
+      log('Ollama installed successfully');
+      stats.ollamaStatus = 'AI Engine Installed';
       ollamaDownloadProgress = 0;
+      setupPhase = null;
       sendStatusToRenderer();
       return true;
     }
   } catch (err) {
-    console.error('Ollama installation failed:', err);
-    stats.ollamaStatus = 'install failed';
+    logError('Ollama installation failed', err);
+    stats.ollamaStatus = 'Install failed';
     ollamaDownloadProgress = 0;
+    setupPhase = null;
     sendStatusToRenderer();
     return false;
   }
@@ -596,6 +655,7 @@ async function getOllamaModels() {
             size: m.size,
             modified: m.modified_at
           }));
+          log(`Found ${models.length} Ollama models`);
           resolve(stats.ollamaModels);
         } catch {
           resolve([]);
@@ -618,17 +678,45 @@ async function pullModel(modelName) {
     OLLAMA_MODELS: OLLAMA_MODELS_DIR
   };
   
+  log(`Pulling model: ${modelName}`);
+  setupPhase = 'downloading-model';
+  setupProgress = 0;
+  stats.ollamaStatus = `Downloading AI Model (${modelName})...`;
+  sendStatusToRenderer();
+  
   return new Promise((resolve, reject) => {
-    stats.ollamaStatus = `pulling ${modelName}...`;
-    sendStatusToRenderer();
-
-    exec(`${ollamaCmd} pull ${modelName}`, { timeout: 600000, env }, (error, stdout, stderr) => {
-      if (error) {
-        stats.ollamaStatus = `pull failed: ${error.message}`;
+    const pullProcess = exec(`${ollamaCmd} pull ${modelName}`, { timeout: 600000, env });
+    
+    // Try to parse progress from stdout
+    let lastProgress = 0;
+    pullProcess.stdout.on('data', (data) => {
+      const output = data.toString();
+      log(`[Ollama pull] ${output.trim()}`);
+      // Try to extract percentage
+      const match = output.match(/(\d+)%/);
+      if (match) {
+        lastProgress = parseInt(match[1]);
+        setupProgress = lastProgress;
+        stats.ollamaStatus = `Downloading AI Model... ${lastProgress}%`;
         sendStatusToRenderer();
-        reject(error);
+      }
+    });
+    
+    pullProcess.stderr.on('data', (data) => {
+      log(`[Ollama pull stderr] ${data.toString().trim()}`);
+    });
+    
+    pullProcess.on('close', (code) => {
+      if (code !== 0) {
+        logError(`Model pull failed with code ${code}`);
+        stats.ollamaStatus = 'Model download failed';
+        setupPhase = null;
+        sendStatusToRenderer();
+        reject(new Error(`Pull failed with code ${code}`));
       } else {
-        stats.ollamaStatus = `${modelName} ready`;
+        log(`Model ${modelName} pulled successfully`);
+        stats.ollamaStatus = 'AI Ready';
+        setupPhase = null;
         getOllamaModels();
         sendStatusToRenderer();
         resolve(true);
@@ -652,86 +740,276 @@ async function deleteModel(modelName) {
   });
 }
 
+// Toggle online status
+async function toggleOnlineStatus() {
+  if (!config.apiKey) {
+    logError('API key required to go online');
+    return false;
+  }
+  
+  const newStatus = !isOnline;
+  log(`Toggling online status to: ${newStatus}`);
+  
+  try {
+    // Update server
+    const result = await makeRequest(`${SERVER_URL}/api/worker/set-online`, {
+      method: 'POST',
+      body: { isOnline: newStatus }
+    });
+    
+    if (result.status === 200) {
+      isOnline = newStatus;
+      
+      if (isOnline && !isWorkerRunning) {
+        await startWorker();
+      } else if (!isOnline && isWorkerRunning) {
+        stopWorker();
+      }
+      
+      sendStatusToRenderer();
+      updateTrayMenu();
+      showNotification('ComputeGrid Worker', isOnline ? 'You are now online and can receive tasks' : 'You are now offline');
+      return true;
+    } else {
+      logError('Failed to update online status: ' + JSON.stringify(result.data));
+      return false;
+    }
+  } catch (err) {
+    logError('Failed to toggle online status', err);
+    return false;
+  }
+}
+
+// Make HTTP request helper
+function makeRequest(url, options = {}) {
+  return new Promise((resolve, reject) => {
+    const parsedUrl = new URL(url);
+    const isHttps = parsedUrl.protocol === 'https:';
+    const lib = isHttps ? https : http;
+
+    const reqOptions = {
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port || (isHttps ? 443 : 80),
+      path: parsedUrl.pathname + parsedUrl.search,
+      method: options.method || 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': config.apiKey,
+        ...options.headers
+      }
+    };
+
+    const req = lib.request(reqOptions, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          resolve({ status: res.statusCode, data: parsed });
+        } catch {
+          resolve({ status: res.statusCode, data });
+        }
+      });
+    });
+
+    req.on('error', reject);
+    
+    if (options.body) {
+      req.write(JSON.stringify(options.body));
+    }
+    
+    req.end();
+  });
+}
+
+// Validate API key with server
+async function validateApiKey(apiKey) {
+  log('Validating API key...');
+  try {
+    const result = await makeRequest(`${SERVER_URL}/api/worker/validate`, {
+      method: 'GET',
+      headers: { 'X-API-Key': apiKey }
+    });
+    
+    if (result.status === 200) {
+      log('API key validated successfully');
+      return { valid: true, worker: result.data };
+    } else {
+      logError('API key validation failed: ' + JSON.stringify(result.data));
+      return { valid: false, error: result.data.message || 'Invalid API key' };
+    }
+  } catch (err) {
+    logError('API key validation request failed', err);
+    return { valid: false, error: err.message };
+  }
+}
+
 // Start the worker
 async function startWorker() {
-  if (isWorkerRunning) return;
+  if (isWorkerRunning) {
+    log('Worker already running');
+    return;
+  }
+  
+  lastError = null;
+  
   if (!config.apiKey) {
+    logError('API key required');
     stats.status = 'API key required';
     sendStatusToRenderer();
     return;
   }
 
-  isWorkerRunning = true;
-  stats.status = 'starting...';
+  log('Starting worker...');
+  stats.status = 'Starting...';
   sendStatusToRenderer();
   updateTrayMenu();
 
-  // Check and setup Ollama
-  const ollamaInstalled = await checkOllama();
-  if (!ollamaInstalled) {
-    try {
-      await installOllama();
-    } catch (err) {
-      console.error('Ollama install failed:', err);
+  try {
+    // Validate API key first
+    stats.status = 'Validating API key...';
+    sendStatusToRenderer();
+    
+    const validation = await validateApiKey(config.apiKey);
+    if (!validation.valid) {
+      logError('API key invalid: ' + validation.error);
+      stats.status = 'Invalid API key';
+      sendStatusToRenderer();
+      return;
     }
-  }
-  
-  // Ensure Ollama service is running
-  const ollamaRunning = await checkOllamaRunning();
-  if (!ollamaRunning) {
-    await startOllamaService();
-  }
-  
-  // Get current models
-  await getOllamaModels();
+    
+    log('API key valid, checking AI setup...');
+    
+    // Check and setup Ollama
+    stats.status = 'Checking AI...';
+    sendStatusToRenderer();
+    
+    const ollamaInstalled = await checkOllama();
+    if (!ollamaInstalled) {
+      log('Ollama not installed, installing...');
+      try {
+        await installOllama();
+      } catch (err) {
+        logError('Ollama install failed', err);
+        // Continue anyway, will use simulated responses
+      }
+    }
+    
+    // Ensure Ollama service is running
+    const ollamaRunning = await checkOllamaRunning();
+    if (!ollamaRunning) {
+      log('Ollama not running, starting service...');
+      await startOllamaService();
+      // Wait a bit more for service to be ready
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    
+    // Get current models
+    const models = await getOllamaModels();
+    log(`Found ${models.length} models`);
+    
+    // Check if we need to pull a model
+    if (models.length === 0) {
+      const totalMem = os.totalmem() / (1024 * 1024 * 1024);
+      const modelToPull = totalMem >= 8 ? 'mistral' : 'tinyllama';
+      log(`No models found, pulling ${modelToPull} (RAM: ${totalMem.toFixed(1)}GB)`);
+      
+      try {
+        await pullModel(modelToPull);
+      } catch (err) {
+        logError('Model pull failed', err);
+        // Continue anyway, will use simulated responses
+      }
+    }
 
-  // Start the worker process with integrity info
-  const workerScript = path.join(__dirname, 'worker.js');
-  const appSignature = generateAppSignature();
-  
-  workerProcess = spawn(process.execPath, [workerScript], {
-    env: {
-      ...process.env,
-      CG_API_KEY: config.apiKey,
-      CG_SERVER_URL: SERVER_URL,
-      CG_APP_VERSION: APP_VERSION,
-      CG_APP_SIGNATURE: appSignature
-    },
-    stdio: ['pipe', 'pipe', 'pipe', 'ipc']
-  });
-  
-  console.log(`Worker started with signature: ${appSignature}`);
+    // Start the worker process with integrity info
+    log('Starting worker process...');
+    stats.status = 'Connecting...';
+    sendStatusToRenderer();
+    
+    const workerScript = path.join(__dirname, 'worker.js');
+    const appSignature = generateAppSignature();
+    
+    workerProcess = spawn(process.execPath, [workerScript], {
+      env: {
+        ...process.env,
+        CG_API_KEY: config.apiKey,
+        CG_SERVER_URL: SERVER_URL,
+        CG_APP_VERSION: APP_VERSION,
+        CG_APP_SIGNATURE: appSignature
+      },
+      stdio: ['pipe', 'pipe', 'pipe', 'ipc']
+    });
+    
+    log(`Worker process started (PID: ${workerProcess.pid})`);
+    isWorkerRunning = true;
 
-  workerProcess.stdout.on('data', (data) => {
-    const message = data.toString();
-    console.log('[Worker]', message);
-    parseWorkerOutput(message);
-  });
+    workerProcess.stdout.on('data', (data) => {
+      const message = data.toString();
+      log('[Worker] ' + message.trim());
+      parseWorkerOutput(message);
+    });
 
-  workerProcess.stderr.on('data', (data) => {
-    console.error('[Worker Error]', data.toString());
-  });
+    workerProcess.stderr.on('data', (data) => {
+      const message = data.toString().trim();
+      logError('[Worker Error] ' + message);
+    });
 
-  workerProcess.on('message', (message) => {
-    if (message.type === 'stats') {
-      stats = { ...stats, ...message.data };
+    workerProcess.on('message', (message) => {
+      if (message.type === 'stats') {
+        stats = { ...stats, ...message.data };
+        sendStatusToRenderer();
+        updateTrayMenu();
+      } else if (message.type === 'error') {
+        logError('Worker error: ' + message.error);
+      }
+    });
+
+    workerProcess.on('close', (code) => {
+      log(`Worker process exited with code ${code}`);
+      isWorkerRunning = false;
+      isOnline = false;
+      stats.status = code === 0 ? 'Stopped' : 'Crashed';
+      if (code !== 0 && code !== null) {
+        logError(`Worker crashed with exit code ${code}`);
+      }
       sendStatusToRenderer();
       updateTrayMenu();
-    }
-  });
+    });
 
-  workerProcess.on('close', (code) => {
-    console.log(`Worker process exited with code ${code}`);
-    isWorkerRunning = false;
-    stats.status = 'stopped';
+    workerProcess.on('error', (err) => {
+      logError('Worker process error', err);
+      isWorkerRunning = false;
+      isOnline = false;
+      stats.status = 'Error';
+      sendStatusToRenderer();
+      updateTrayMenu();
+    });
+
+    stats.status = 'Running';
+    isOnline = true;
+    
+    // Update server with online status
+    try {
+      await makeRequest(`${SERVER_URL}/api/worker/set-online`, {
+        method: 'POST',
+        body: { isOnline: true }
+      });
+    } catch (err) {
+      log('Could not update online status: ' + err.message);
+    }
+    
     sendStatusToRenderer();
     updateTrayMenu();
-  });
-
-  stats.status = 'running';
-  sendStatusToRenderer();
-  updateTrayMenu();
-  showNotification('ComputeGrid Worker', 'Worker started successfully');
+    showNotification('ComputeGrid Worker', 'Worker started - You are now online');
+    
+  } catch (err) {
+    logError('Failed to start worker', err);
+    stats.status = 'Failed to start';
+    isWorkerRunning = false;
+    sendStatusToRenderer();
+    updateTrayMenu();
+  }
 }
 
 // Parse worker output for stats
@@ -750,13 +1028,28 @@ function parseWorkerOutput(message) {
 }
 
 // Stop the worker
-function stopWorker() {
+async function stopWorker() {
+  log('Stopping worker...');
+  
   if (workerProcess) {
     workerProcess.kill();
     workerProcess = null;
   }
+  
   isWorkerRunning = false;
-  stats.status = 'stopped';
+  isOnline = false;
+  stats.status = 'Stopped';
+  
+  // Update server with offline status
+  try {
+    await makeRequest(`${SERVER_URL}/api/worker/set-online`, {
+      method: 'POST',
+      body: { isOnline: false }
+    });
+  } catch (err) {
+    log('Could not update offline status: ' + err.message);
+  }
+  
   sendStatusToRenderer();
   updateTrayMenu();
 }
@@ -772,7 +1065,7 @@ function clearAppData() {
     // Delete Ollama directory (binary and models)
     if (fs.existsSync(OLLAMA_DIR)) {
       fs.rmSync(OLLAMA_DIR, { recursive: true, force: true });
-      console.log('Deleted Ollama directory:', OLLAMA_DIR);
+      log('Deleted Ollama directory: ' + OLLAMA_DIR);
     }
     
     config = {
@@ -781,6 +1074,7 @@ function clearAppData() {
       minimizeToTray: true,
       startMinimized: false
     };
+    
     stats = {
       tasksCompleted: 0,
       earnings: '0.00',
@@ -788,43 +1082,152 @@ function clearAppData() {
       ollamaStatus: 'not installed',
       ollamaModels: []
     };
+    
+    lastError = null;
     sendStatusToRenderer();
-    return true;
+    log('App data cleared');
   } catch (err) {
-    console.error('Failed to clear data:', err);
-    return false;
+    logError('Failed to clear app data', err);
   }
 }
 
-// Uninstall the app
-async function uninstallApp() {
-  stopWorker();
-  clearAppData();
-  
-  // Show instructions based on platform
+// Uninstall guidance
+function showUninstallInstructions() {
   const platform = process.platform;
-  let instructions = '';
+  let message = '';
   
   if (platform === 'win32') {
-    instructions = 'To complete uninstallation:\n\n1. Open Settings > Apps\n2. Find "ComputeGrid Worker"\n3. Click Uninstall\n\nOr use Control Panel > Programs and Features';
+    message = 'To uninstall:\n\n1. Go to Settings > Apps > Installed apps\n2. Find "ComputeGrid Worker"\n3. Click the three dots and select "Uninstall"';
   } else if (platform === 'darwin') {
-    instructions = 'To complete uninstallation:\n\n1. Open Finder\n2. Go to Applications\n3. Drag "ComputeGrid Worker" to Trash';
+    message = 'To uninstall:\n\n1. Open Finder\n2. Go to Applications\n3. Drag "ComputeGrid Worker" to the Trash\n4. Empty the Trash';
   } else {
-    instructions = 'To complete uninstallation:\n\nDelete the AppImage file you used to run this application.';
+    message = 'To uninstall, delete the AppImage file you downloaded.';
   }
   
-  dialog.showMessageBox(mainWindow, {
+  dialog.showMessageBoxSync(mainWindow, {
     type: 'info',
-    title: 'Uninstall ComputeGrid Worker',
-    message: 'App data has been cleared.',
-    detail: instructions,
-    buttons: ['OK']
-  }).then(() => {
-    app.quit();
+    title: 'Uninstall Instructions',
+    message: 'ComputeGrid Worker',
+    detail: message
   });
 }
 
-// IPC handlers for window controls (frameless window)
+// IPC handlers
+ipcMain.handle('get-status', () => ({
+  isRunning: isWorkerRunning,
+  isOnline,
+  stats,
+  config: {
+    apiKey: config.apiKey ? '***' + config.apiKey.slice(-6) : '',
+    serverUrl: SERVER_URL,
+    autoStart: config.autoStart,
+    minimizeToTray: config.minimizeToTray,
+    startMinimized: config.startMinimized
+  },
+  ollamaDownloadProgress,
+  setupPhase,
+  setupProgress,
+  lastError
+}));
+
+ipcMain.handle('save-config', async (event, newConfig) => {
+  log('Saving config...');
+  // If API key is masked, keep the old one
+  if (newConfig.apiKey && !newConfig.apiKey.includes('*')) {
+    config.apiKey = newConfig.apiKey;
+  }
+  config.autoStart = newConfig.autoStart ?? config.autoStart;
+  config.minimizeToTray = newConfig.minimizeToTray ?? config.minimizeToTray;
+  config.startMinimized = newConfig.startMinimized ?? config.startMinimized;
+  
+  saveConfig();
+  
+  // Update auto-start setting
+  app.setLoginItemSettings({
+    openAtLogin: config.autoStart,
+    path: process.execPath
+  });
+  
+  sendStatusToRenderer();
+  return true;
+});
+
+ipcMain.handle('start-worker', async () => {
+  await startWorker();
+  return true;
+});
+
+ipcMain.handle('stop-worker', async () => {
+  await stopWorker();
+  return true;
+});
+
+ipcMain.handle('toggle-online', async () => {
+  return await toggleOnlineStatus();
+});
+
+ipcMain.handle('check-ollama', checkOllama);
+
+ipcMain.handle('get-ollama-models', getOllamaModels);
+
+ipcMain.handle('pull-model', async (event, modelName) => {
+  try {
+    await pullModel(modelName);
+    return true;
+  } catch {
+    return false;
+  }
+});
+
+ipcMain.handle('delete-model', async (event, modelName) => {
+  try {
+    await deleteModel(modelName);
+    return true;
+  } catch {
+    return false;
+  }
+});
+
+ipcMain.handle('open-external', (event, url) => {
+  shell.openExternal(url);
+});
+
+ipcMain.handle('get-server-url', () => SERVER_URL);
+
+ipcMain.handle('get-version', () => APP_VERSION);
+
+ipcMain.handle('get-app-info', () => ({
+  version: APP_VERSION,
+  platform: process.platform,
+  arch: process.arch,
+  electronVersion: process.versions.electron,
+  nodeVersion: process.versions.node,
+  serverUrl: SERVER_URL
+}));
+
+ipcMain.handle('check-for-updates', async () => {
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    return result;
+  } catch (err) {
+    logError('Update check failed', err);
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('clear-data', () => {
+  clearAppData();
+  return true;
+});
+
+ipcMain.handle('uninstall-app', async () => {
+  stopWorker();
+  clearAppData();
+  showUninstallInstructions();
+  app.quit();
+});
+
+// Window control handlers
 ipcMain.handle('window-minimize', () => {
   if (mainWindow) mainWindow.minimize();
 });
@@ -840,322 +1243,88 @@ ipcMain.handle('window-maximize', () => {
 });
 
 ipcMain.handle('window-close', () => {
-  if (mainWindow) {
-    if (config.minimizeToTray && isWorkerRunning) {
-      mainWindow.hide();
-      showNotification('ComputeGrid Worker', 'Worker is still running in the background');
-    } else {
-      mainWindow.close();
-    }
-  }
+  if (mainWindow) mainWindow.close();
 });
 
-ipcMain.handle('window-is-maximized', () => {
-  return mainWindow ? mainWindow.isMaximized() : false;
-});
-
-// IPC handlers
-ipcMain.handle('get-status', () => {
-  return {
-    isRunning: isWorkerRunning,
-    stats,
-    config: {
-      apiKey: config.apiKey ? '***' + config.apiKey.slice(-6) : '',
-      serverUrl: SERVER_URL,
-      autoStart: config.autoStart,
-      minimizeToTray: config.minimizeToTray,
-      startMinimized: config.startMinimized
-    },
-    ollamaDownloadProgress
-  };
-});
-
-ipcMain.handle('get-server-url', () => {
-  return SERVER_URL;
-});
-
-ipcMain.handle('save-config', (event, newConfig) => {
-  config = { ...config, ...newConfig };
-  saveConfig();
-  setupAutoStart();
-  sendStatusToRenderer();
-  return true;
-});
-
-ipcMain.handle('start-worker', () => {
-  startWorker();
-  return true;
-});
-
-ipcMain.handle('stop-worker', () => {
-  stopWorker();
-  return true;
-});
-
-ipcMain.handle('check-ollama', async () => {
-  const installed = await checkOllama();
-  if (installed) {
-    const running = await checkOllamaRunning();
-    if (!running) {
-      await startOllamaService();
-    }
-    await getOllamaModels();
-  }
-  return installed;
-});
-
-ipcMain.handle('install-ollama', async () => {
-  return await installOllama();
-});
-
-ipcMain.handle('get-ollama-models', async () => {
-  return await getOllamaModels();
-});
-
-ipcMain.handle('pull-model', async (event, modelName) => {
-  return await pullModel(modelName);
-});
-
-ipcMain.handle('delete-model', async (event, modelName) => {
-  return await deleteModel(modelName);
-});
-
-ipcMain.handle('open-external', (event, url) => {
-  shell.openExternal(url);
-});
-
-ipcMain.handle('get-version', () => {
-  return APP_VERSION;
-});
-
-ipcMain.handle('check-for-updates', async () => {
-  try {
-    const result = await autoUpdater.checkForUpdates();
-    return result;
-  } catch (err) {
-    return { error: err.message };
-  }
-});
-
-ipcMain.handle('clear-data', () => {
-  return clearAppData();
-});
-
-ipcMain.handle('uninstall-app', () => {
-  uninstallApp();
-  return true;
-});
-
-ipcMain.handle('get-app-info', () => {
-  return {
-    version: APP_VERSION,
-    platform: process.platform,
-    arch: process.arch,
-    electronVersion: process.versions.electron,
-    nodeVersion: process.versions.node,
-    dataPath: app.getPath('userData'),
-    serverUrl: SERVER_URL
-  };
-});
-
-// Auto-start configuration
-function setupAutoStart() {
-  app.setLoginItemSettings({
-    openAtLogin: config.autoStart,
-    openAsHidden: config.startMinimized
-  });
-}
-
-// Auto-setup Ollama on startup
-async function setupOllamaOnStartup() {
-  stats.ollamaStatus = 'checking...';
-  sendStatusToRenderer();
-  
-  const installed = await checkOllama();
-  
-  if (!installed) {
-    // Auto-install Ollama
-    stats.ollamaStatus = 'downloading AI...';
-    sendStatusToRenderer();
-    
-    try {
-      await installOllama();
-    } catch (err) {
-      console.error('Ollama auto-install failed:', err);
-      stats.ollamaStatus = 'install failed';
-      sendStatusToRenderer();
-      return;
-    }
-  }
-  
-  // Start Ollama service
-  const running = await checkOllamaRunning();
-  if (!running) {
-    stats.ollamaStatus = 'starting AI service...';
-    sendStatusToRenderer();
-    await startOllamaService();
-  }
-  
-  // Get available models
-  const models = await getOllamaModels();
-  
-  // If no models installed, pull default model
-  if (!models || models.length === 0) {
-    stats.ollamaStatus = 'downloading AI model...';
-    sendStatusToRenderer();
-    
-    // Pick model based on RAM: TinyLlama for <8GB, Mistral for 8GB+
-    const totalMemory = os.totalmem() / (1024 * 1024 * 1024); // GB
-    const defaultModel = totalMemory < 8 ? 'tinyllama' : 'mistral';
-    
-    try {
-      await pullModel(defaultModel);
-      stats.ollamaStatus = `${defaultModel} ready`;
-    } catch (err) {
-      console.error('Model pull failed:', err);
-      stats.ollamaStatus = 'model download failed';
-    }
-  } else {
-    stats.ollamaStatus = 'ready';
-  }
-  
-  sendStatusToRenderer();
-}
-
-// Setup auto-updater with silent background installation
-let pendingUpdateVersion = null;
-let updateCheckInterval = null;
-let idleInstallInterval = null;
-let isInstallingUpdate = false;
-
+// Auto-updater setup
 function setupAutoUpdater() {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
   
-  // Set GitHub as the update provider
   autoUpdater.setFeedURL({
     provider: 'github',
     owner: 'TheFutureForgeCo',
     repo: 'Worker'
   });
-
+  
   autoUpdater.on('checking-for-update', () => {
-    console.log('Checking for updates...');
+    log('Checking for updates...');
   });
-
+  
   autoUpdater.on('update-available', (info) => {
-    console.log('Update available:', info.version);
+    log('Update available: ' + info.version);
     if (mainWindow) {
-      mainWindow.webContents.send('update-status', { status: 'downloading', version: info.version });
+      mainWindow.webContents.send('update-status', { 
+        status: 'downloading', 
+        version: info.version 
+      });
     }
   });
-
+  
   autoUpdater.on('update-not-available', () => {
-    console.log('No updates available');
+    log('No updates available');
     if (mainWindow) {
       mainWindow.webContents.send('update-status', { status: 'up-to-date' });
     }
   });
-
-  autoUpdater.on('download-progress', (progress) => {
-    console.log(`Download progress: ${Math.round(progress.percent)}%`);
-    if (mainWindow) {
-      mainWindow.webContents.send('update-status', { status: 'downloading', progress: progress.percent });
-    }
-  });
-
+  
   autoUpdater.on('update-downloaded', (info) => {
-    console.log('Update downloaded:', info.version);
-    pendingUpdateVersion = info.version;
-    
+    log('Update downloaded: ' + info.version);
     if (mainWindow) {
-      mainWindow.webContents.send('update-status', { status: 'ready', version: info.version });
+      mainWindow.webContents.send('update-status', { 
+        status: 'ready', 
+        version: info.version 
+      });
     }
     
-    // Silent auto-install: install when worker is idle
-    attemptSilentInstall(info.version);
+    // Install when idle (not processing tasks)
+    if (!isWorkerRunning) {
+      log('Installing update now (worker not running)');
+      autoUpdater.quitAndInstall(true, true);
+    } else {
+      log('Update will install when worker stops');
+    }
   });
-
+  
   autoUpdater.on('error', (err) => {
-    console.error('Auto-update error:', err);
+    logError('Auto-updater error', err);
     if (mainWindow) {
-      mainWindow.webContents.send('update-status', { status: 'error', message: err.message });
+      mainWindow.webContents.send('update-status', { status: 'error' });
     }
   });
-
-  // Initial check
-  autoUpdater.checkForUpdates().catch(err => {
-    console.log('Update check failed (may be in development):', err.message);
-  });
-
-  // Check for updates hourly
-  updateCheckInterval = setInterval(() => {
+  
+  // Check for updates on startup (after a delay)
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch(err => {
+      log('Initial update check failed: ' + err.message);
+    });
+  }, 10000);
+  
+  // Check hourly
+  setInterval(() => {
     autoUpdater.checkForUpdates().catch(() => {});
   }, 60 * 60 * 1000);
 }
 
-// Check if worker process is truly stopped (not just isWorkerRunning flag)
-function isWorkerFullyStopped() {
-  return !isWorkerRunning && workerProcess === null;
-}
-
-// Attempt to silently install update when worker is idle
-function attemptSilentInstall(version) {
-  // Prevent multiple install attempts
-  if (isInstallingUpdate) {
-    console.log('Update installation already in progress');
-    return;
-  }
-  
-  // Clear any existing idle check interval
-  if (idleInstallInterval) {
-    clearInterval(idleInstallInterval);
-    idleInstallInterval = null;
-  }
-  
-  // If worker is fully stopped, install after a safety delay
-  if (isWorkerFullyStopped()) {
-    console.log('Worker idle - scheduling update installation...');
-    isInstallingUpdate = true;
-    showNotification('Update Ready', `v${version} will install in 10 seconds...`);
-    
-    // Wait 10 seconds to ensure everything is settled
-    setTimeout(() => {
-      // Re-check worker is still stopped
-      if (isWorkerFullyStopped()) {
-        console.log('Installing update...');
-        autoUpdater.quitAndInstall(false, true); // Not silent (show progress), force quit
-      } else {
-        // Worker started again, reschedule
-        isInstallingUpdate = false;
-        attemptSilentInstall(version);
-      }
-    }, 10000);
-    return;
-  }
-  
-  // Worker is running - check periodically for idle state
-  console.log('Worker running - waiting for idle state to install update...');
-  showNotification('Update Ready', `v${version} will install when worker stops`);
-  
-  idleInstallInterval = setInterval(() => {
-    if (isWorkerFullyStopped() && !isInstallingUpdate) {
-      clearInterval(idleInstallInterval);
-      idleInstallInterval = null;
-      attemptSilentInstall(version);
-    }
-  }, 30000); // Check every 30 seconds
-}
-
-// App lifecycle
+// App initialization
 app.whenReady().then(() => {
+  log('App starting...');
   loadConfig();
   createWindow();
   createTray();
-  setupAutoStart();
   setupAutoUpdater();
   
-  // Handle second instance - focus existing window
+  // Handle second instance (someone tried to run the app again)
   app.on('second-instance', () => {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
@@ -1163,22 +1332,19 @@ app.whenReady().then(() => {
       mainWindow.focus();
     }
   });
-
-  console.log(`ComputeGrid Worker v${APP_VERSION} started`);
-  console.log(`App signature: ${generateAppSignature()}`);
-  console.log(`Server URL: ${SERVER_URL}`);
-
-  // Auto-setup Ollama on startup - install and pull models automatically
-  setupOllamaOnStartup();
-
+  
+  // Auto-start worker if configured
   if (config.autoStart && config.apiKey) {
-    startWorker();
+    log('Auto-starting worker...');
+    setTimeout(() => startWorker(), 2000);
   }
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin' && !isWorkerRunning) {
-    app.quit();
+  if (process.platform !== 'darwin') {
+    if (!config.minimizeToTray || !isWorkerRunning) {
+      app.quit();
+    }
   }
 });
 

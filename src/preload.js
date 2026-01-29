@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Worker control
   startWorker: () => ipcRenderer.invoke('start-worker'),
   stopWorker: () => ipcRenderer.invoke('stop-worker'),
+  toggleOnline: () => ipcRenderer.invoke('toggle-online'),
   
   // Ollama management
   checkOllama: () => ipcRenderer.invoke('check-ollama'),
