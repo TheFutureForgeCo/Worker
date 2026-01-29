@@ -24,6 +24,11 @@ if (!gotTheLock) {
       }
       mainWindow.show();
       mainWindow.focus();
+    } else {
+      // Window doesn't exist yet, create it
+      app.whenReady().then(() => {
+        createWindow();
+      });
     }
   });
 }
