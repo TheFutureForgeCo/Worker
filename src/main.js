@@ -32,6 +32,15 @@ const OLLAMA_DIR = path.join(app.getPath('userData'), 'ollama');
 const OLLAMA_MODELS_DIR = path.join(OLLAMA_DIR, 'models');
 const OLLAMA_BIN_DIR = path.join(OLLAMA_DIR, 'bin');
 
+// Get the correct path for the worker script (handles packaged app)
+function getWorkerScriptPath() {
+  if (app.isPackaged) {
+    // In packaged app, use the unpacked resources path
+    return path.join(process.resourcesPath, 'app.asar.unpacked', 'src', 'worker.js');
+  }
+  return path.join(__dirname, 'worker.js');
+}
+
 // Ollama binary download URLs (direct binary, not installers)
 const OLLAMA_BINARY_URLS = {
   win32: {
@@ -927,7 +936,8 @@ async function startWorker() {
     stats.status = 'Connecting...';
     sendStatusToRenderer();
     
-    const workerScript = path.join(__dirname, 'worker.js');
+    const workerScript = getWorkerScriptPath();
+    log(`Worker script path: ${workerScript}`);
     const appSignature = generateAppSignature();
     
     workerProcess = spawn(process.execPath, [workerScript], {
