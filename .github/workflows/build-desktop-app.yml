@@ -43,6 +43,8 @@ jobs:
             dist/*.exe
             dist/*.AppImage
             dist/*.dmg
+            dist/*.yml
+            dist/*.yaml
           if-no-files-found: warn
 
   release:
@@ -63,10 +65,17 @@ jobs:
           name: desktop-app-linux
           path: dist
       
+      - name: List artifacts
+        run: ls -la dist/
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: dist/*
+          files: |
+            dist/*.exe
+            dist/*.AppImage
+            dist/*.yml
+            dist/*.yaml
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
