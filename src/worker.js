@@ -75,8 +75,6 @@ let lastError = null;
 
 let stats = {
   tasksCompleted: 0,
-  earnings: '0.00',
-  tokensEarned: '0',
   status: 'starting'
 };
 
@@ -411,11 +409,9 @@ async function completeTask(taskId, result, actualTokens = 0) {
     });
     
     if (response.status === 200 && response.data) {
-      const tokensEarned = response.data.tokensEarned || response.data.workerEarning || 0;
       stats.tasksCompleted++;
-      stats.tokensEarned = (parseFloat(stats.tokensEarned) + parseFloat(tokensEarned)).toFixed(2);
       sendStats();
-      log(`Task completed! Earned: ${tokensEarned} tokens`);
+      log(`Task completed successfully!`);
       return true;
     }
   } catch (err) {
