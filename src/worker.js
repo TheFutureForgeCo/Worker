@@ -11,17 +11,30 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-// Log file for debugging
+// Log file for debugging - use userData folder or temp
 const LOG_DIR = process.env.CG_LOG_DIR || os.tmpdir();
 const LOG_FILE = path.join(LOG_DIR, 'computegrid-worker.log');
 
-// Initialize logging immediately
-try {
-  const initMessage = `\n${'='.repeat(50)}\n[${new Date().toISOString()}] Worker process starting...\nLog file: ${LOG_FILE}\n${'='.repeat(50)}\n`;
-  fs.appendFileSync(LOG_FILE, initMessage);
-} catch (e) {
-  console.error('Failed to initialize log file:', e.message);
-}
+// IMMEDIATE logging - write the very first line before anything else
+const earlyLog = (msg) => {
+  try {
+    fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] ${msg}\n`);
+  } catch (e) {}
+};
+
+// Start logging immediately
+earlyLog('='.repeat(60));
+earlyLog('WORKER PROCESS STARTED');
+earlyLog(`PID: ${process.pid}`);
+earlyLog(`Node version: ${process.version}`);
+earlyLog(`Platform: ${process.platform}, Arch: ${process.arch}`);
+earlyLog(`CWD: ${process.cwd()}`);
+earlyLog(`Log file: ${LOG_FILE}`);
+earlyLog(`CG_API_KEY set: ${process.env.CG_API_KEY ? 'yes' : 'no'}`);
+earlyLog(`CG_SERVER_URL: ${process.env.CG_SERVER_URL || 'NOT SET'}`);
+earlyLog(`CG_APP_VERSION: ${process.env.CG_APP_VERSION || 'NOT SET'}`);
+earlyLog(`IPC available: ${typeof process.send === 'function' ? 'yes' : 'no'}`);
+earlyLog('='.repeat(60));
 
 // Ensure we catch all unhandled errors
 process.on('uncaughtException', (err) => {
@@ -570,6 +583,7 @@ async function testConnection() {
 
 // Main loop with reconnection logic
 async function mainLoop() {
+  earlyLog('mainLoop() entered');
   log('ComputeGrid Worker starting...');
   log(`Version: ${APP_VERSION}`);
   log(`Server: ${SERVER_URL}`);
@@ -691,6 +705,7 @@ process.on('SIGTERM', () => {
 
 // Handle parent disconnect
 process.on('disconnect', () => {
+  earlyLog('!!! DISCONNECT EVENT - Parent process disconnected');
   log('Parent process disconnected, shutting down...');
   isRunning = false;
   setTimeout(() => process.exit(0), 1000);
