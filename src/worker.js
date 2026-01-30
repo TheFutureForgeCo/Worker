@@ -307,28 +307,48 @@ async function pollForTasks() {
   try {
     const response = await makeRequest(`${SERVER_URL}/api/worker/poll`, { timeout: 15000 });
     
-    // Log non-200 responses for debugging
-    if (response.status !== 200) {
-      const msg = response.data?.message || `Status ${response.status}`;
-      if (!connectionFailed) {
-        log(`Poll response: ${response.status} - ${msg}`);
-        if (response.status === 400 || response.status === 401) {
-          sendError(msg);
-        }
-        connectionFailed = true;
-        lastError = msg;
+    // Handle successful response
+    if (response.status === 200) {
+      // Clear any previous connection errors
+      if (connectionFailed) {
+        log('Connection restored');
+        connectionFailed = false;
+        lastError = null;
+        stats.status = 'Running';
+        sendStats();
       }
+      
+      // Check for tasks array (new format) or single task
+      if (response.data?.tasks?.length > 0) {
+        return response.data.tasks[0];
+      }
+      if (response.data?.task) {
+        return response.data.task;
+      }
+      
       return null;
     }
     
-    connectionFailed = false;
+    // Handle error responses
+    const msg = response.data?.message || `HTTP ${response.status}`;
     
-    // Check for tasks array (new format) or single task
-    if (response.data && response.data.tasks && response.data.tasks.length > 0) {
-      return response.data.tasks[0];
-    }
-    if (response.data && response.data.task) {
-      return response.data.task;
+    if (!connectionFailed) {
+      log(`Poll failed: ${response.status} - ${msg}`);
+      connectionFailed = true;
+      lastError = msg;
+      
+      // Only send specific errors to user
+      if (response.status === 400) {
+        // Worker must be online - likely server thinks we're offline
+        sendError('Server thinks worker is offline. Trying to reconnect...');
+        stats.status = 'Reconnecting...';
+      } else if (response.status === 401) {
+        sendError('Invalid API key. Please check your API key in settings.');
+        stats.status = 'Error: Invalid API key';
+      } else if (response.status >= 500) {
+        stats.status = 'Server error - retrying...';
+      }
+      sendStats();
     }
     
     return null;
@@ -337,10 +357,20 @@ async function pollForTasks() {
       log(`Poll error: ${err.message}`);
       connectionFailed = true;
       lastError = err.message;
+      
+      // Network-level errors
+      if (err.code === 'ENOTFOUND' || err.code === 'ECONNREFUSED') {
+        sendError('Cannot reach server. Check your internet connection.');
+        stats.status = 'Connection error';
+      } else if (err.code === 'ETIMEDOUT' || err.message.includes('timeout')) {
+        stats.status = 'Connection slow - retrying...';
+      } else {
+        stats.status = 'Network error - retrying...';
+      }
+      sendStats();
     }
+    return null;
   }
-  
-  return null;
 }
 
 // Claim a task
@@ -435,44 +465,94 @@ async function sendHeartbeat() {
       method: 'POST',
       timeout: 10000
     });
+    
     if (response.status === 200) {
-      connectionFailed = false;
+      if (connectionFailed) {
+        log('Heartbeat successful - connection restored');
+        connectionFailed = false;
+        lastError = null;
+        stats.status = 'Running';
+        sendStats();
+      }
+    } else if (response.status === 401) {
+      // API key invalid
+      if (!connectionFailed) {
+        log('Heartbeat failed: Invalid API key');
+        connectionFailed = true;
+        lastError = 'Invalid API key';
+        sendError('API key is invalid. Please update your API key in settings.');
+        stats.status = 'Error: Invalid API key';
+        sendStats();
+      }
+    } else if (response.status === 400) {
+      // Worker offline on server side
+      if (!connectionFailed) {
+        log('Heartbeat failed: Worker offline on server');
+        connectionFailed = true;
+        lastError = 'Worker offline';
+        stats.status = 'Reconnecting...';
+        sendStats();
+      }
+    } else if (response.status >= 500) {
+      // Server error
+      if (!connectionFailed) {
+        log(`Heartbeat failed: Server error ${response.status}`);
+        connectionFailed = true;
+        lastError = `Server error ${response.status}`;
+        stats.status = 'Server error - retrying...';
+        sendStats();
+      }
     }
   } catch (err) {
-    // Log but don't spam
+    // Network-level errors
     if (!connectionFailed) {
       log(`Heartbeat failed: ${err.message}`);
+      connectionFailed = true;
+      lastError = err.message;
+      
+      if (err.code === 'ENOTFOUND' || err.code === 'ECONNREFUSED') {
+        stats.status = 'Connection lost';
+      } else if (err.code === 'ETIMEDOUT' || err.message.includes('timeout')) {
+        stats.status = 'Connection slow';
+      } else {
+        stats.status = 'Network error';
+      }
+      sendStats();
     }
   }
 }
 
-// Test connection to server
+// Test connection to server using validate endpoint (doesn't require online status)
 async function testConnection() {
   log(`Testing connection to ${SERVER_URL}...`);
   try {
-    const response = await makeRequest(`${SERVER_URL}/api/worker/poll`, { timeout: 15000 });
+    // Use /api/worker/validate instead of /poll - it tests API key without requiring online status
+    const response = await makeRequest(`${SERVER_URL}/api/worker/validate`, { timeout: 15000 });
     
     // Log the full response for debugging
     log(`Connection test response: status=${response.status}, body=${JSON.stringify(response.data)}`);
     
     if (response.status === 200) {
-      log('Connection to server successful');
+      log('Connection to server successful - API key validated');
+      if (response.data?.valid) {
+        log(`Worker ID: ${response.data.workerId}, Online: ${response.data.isOnline}`);
+      }
       return true;
     }
     
-    // 400 "Worker must be online" means the set-online call failed - NOT a success
-    if (response.status === 400) {
-      const msg = response.data?.message || 'Bad request';
-      log(`Server rejected request (400): ${msg}`);
+    // 401 means API key issue
+    if (response.status === 401) {
+      const msg = response.data?.message || 'Invalid API key';
+      log(`Authentication failed (401): ${msg}`);
       lastError = msg;
       sendError(msg);
       return false;
     }
     
-    // 401 means API key issue
-    if (response.status === 401) {
-      const msg = response.data?.message || 'Unauthorized';
-      log(`Authentication failed (401): ${msg}`);
+    // 400 means bad request
+    if (response.status === 400) {
+      const msg = response.data?.message || 'Bad request';
+      log(`Server rejected request (400): ${msg}`);
       lastError = msg;
       sendError(msg);
       return false;
