@@ -192,32 +192,68 @@ function logError(message, error) {
 }
 
 // Detect GPU capabilities
+// Detect GPU capabilities
 async function detectGpuInfo() {
   try {
     // Use platform-specific commands to detect GPU
     if (process.platform === 'win32') {
-      // Windows: Use WMIC
+      // Windows: Use WMIC with better parsing
       const { execSync } = require('child_process');
       try {
-        const result = execSync('wmic path win32_videocontroller get name,adapterram', { encoding: 'utf8' });
-        const lines = result.trim().split('\n').filter(l => l.trim());
-        if (lines.length > 1) {
-          // Parse the result
-          const gpuLine = lines[1].trim();
-          const hasNvidia = gpuLine.toLowerCase().includes('nvidia');
-          const hasAmd = gpuLine.toLowerCase().includes('amd') || gpuLine.toLowerCase().includes('radeon');
+        // Get GPU info in list format for easier parsing
+        const result = execSync('wmic path win32_videocontroller get name,adapterram /format:list', { encoding: 'utf8' });
+        log('WMIC raw output: ' + result.replace(/\n/g, '|'));
+        
+        // Parse name=value pairs
+        const gpus = [];
+        let currentGpu = {};
+        
+        for (const line of result.split('\n')) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('AdapterRAM=')) {
+            currentGpu.vramBytes = parseInt(trimmed.split('=')[1]) || 0;
+          } else if (trimmed.startsWith('Name=')) {
+            currentGpu.name = trimmed.split('=')[1] || 'Unknown';
+          }
           
-          // Try to extract VRAM
-          const vramMatch = gpuLine.match(/(\d+)/);
-          const vramBytes = vramMatch ? parseInt(vramMatch[1]) : 0;
-          const vramGb = vramBytes / (1024 * 1024 * 1024);
+          // When we have both values, save the GPU
+          if (currentGpu.name && currentGpu.vramBytes !== undefined) {
+            gpus.push({ ...currentGpu });
+            currentGpu = {};
+          }
+        }
+        
+        log('Parsed GPUs: ' + JSON.stringify(gpus));
+        
+        // Find the best GPU (highest VRAM, prefer NVIDIA/AMD)
+        let bestGpu = null;
+        for (const gpu of gpus) {
+          const name = gpu.name.toLowerCase();
+          const isNvidia = name.includes('nvidia');
+          const isAmd = name.includes('amd') || name.includes('radeon');
+          
+          // Skip integrated Intel graphics if we have a dedicated GPU
+          if (name.includes('intel') && bestGpu) continue;
+          
+          if (isNvidia || isAmd) {
+            if (!bestGpu || gpu.vramBytes > bestGpu.vramBytes) {
+              bestGpu = gpu;
+            }
+          }
+        }
+        
+        if (bestGpu) {
+          const vramGb = bestGpu.vramBytes / (1024 * 1024 * 1024);
           
           gpuInfo = {
-            hasGpu: hasNvidia || hasAmd,
-            gpuVramGb: Math.round(vramGb),
-            canGenerateImages: (hasNvidia || hasAmd) && vramGb >= 6,
-            gpuName: gpuLine.split(/\s{2,}/)[0] || 'Unknown'
+            hasGpu: true,
+            gpuVramGb: Math.round(vramGb * 10) / 10, // Round to 1 decimal
+            canGenerateImages: vramGb >= 6,
+            gpuName: bestGpu.name
           };
+          log('Selected GPU: ' + JSON.stringify(gpuInfo));
+        } else {
+          log('No NVIDIA/AMD GPU found in list');
         }
       } catch (e) {
         log('GPU detection failed on Windows: ' + e.message);
@@ -236,7 +272,7 @@ async function detectGpuInfo() {
           
           gpuInfo = {
             hasGpu: true,
-            gpuVramGb: Math.round(vramGb),
+            gpuVramGb: Math.round(vramGb * 10) / 10,
             canGenerateImages: vramGb >= 6,
             gpuName: parts[0].trim()
           };
@@ -260,11 +296,12 @@ async function detectGpuInfo() {
       }
     }
     
-    log(`GPU detected: ${JSON.stringify(gpuInfo)}`);
+    log('Final GPU info: ' + JSON.stringify(gpuInfo));
   } catch (err) {
     log('GPU detection error: ' + err.message);
   }
 }
+
 
 // Load configuration
 function loadConfig() {
