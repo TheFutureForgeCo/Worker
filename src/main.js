@@ -276,7 +276,7 @@ function loadConfig() {
     }
     
     // Verify Image AI installation status by checking if model file exists
-    const imageAiDir = path.join(DATA_DIR, 'image-ai');
+    const imageAiDir = path.join(app.getPath('userData'), 'image-ai');
     const sdModelPath = path.join(imageAiDir, 'sd-v1-5.safetensors');
     const modelExists = fs.existsSync(sdModelPath);
     
@@ -1539,7 +1539,7 @@ ipcMain.handle('open-external', (event, url) => {
 });
 
 // Image AI management
-const IMAGE_AI_DIR = path.join(DATA_DIR, 'image-ai');
+const IMAGE_AI_DIR = path.join(app.getPath('userData'), 'image-ai');
 const SD_MODEL_PATH = path.join(IMAGE_AI_DIR, 'sd-v1-5.safetensors');
 const SD_MODEL_URL = 'https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors';
 const SD_MODEL_SIZE_BYTES = 4265380512; // ~4GB
