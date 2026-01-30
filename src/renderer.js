@@ -29,7 +29,6 @@ const errorDismiss = document.getElementById('errorDismiss');
 // DOM Elements - Main Page
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
-const earnings = document.getElementById('earnings');
 const tasksCompleted = document.getElementById('tasksCompleted');
 const ollamaDot = document.getElementById('ollamaDot');
 const ollamaStatus = document.getElementById('ollamaStatus');
@@ -79,11 +78,6 @@ let isOnline = false;
 let currentConfig = {};
 let serverUrl = '';
 
-// Format earnings as tokens
-function formatEarnings(amount) {
-  const num = parseFloat(amount) || 0;
-  return num.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
-}
 
 // Format task count
 function formatTasks(count) {
@@ -214,7 +208,6 @@ function updateUI(status) {
   onlineToggleBtn.disabled = !currentConfig.apiKey || status.setupPhase;
   
   // Update stats with formatting
-  earnings.textContent = formatEarnings(status.stats.earnings);
   tasksCompleted.textContent = formatTasks(status.stats.tasksCompleted);
   
   // Update Ollama status
