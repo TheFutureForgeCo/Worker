@@ -1085,7 +1085,10 @@ async function startWorker() {
         sendStatusToRenderer();
         updateTrayMenu();
       } else if (message.type === 'error') {
+        // Log error and update lastError so it surfaces to the UI
         logError('Worker error: ' + message.error);
+        lastError = message.error;
+        sendStatusToRenderer();
       }
     });
 
