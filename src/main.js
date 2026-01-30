@@ -1735,10 +1735,14 @@ let imageAiDownloadController = null;
 
 ipcMain.handle('set-gpu-override', async (event, enabled) => {
   config.gpuOverrideEnabled = enabled;
-  // If enabling override, also update gpuInfo to reflect this
+  // If enabling override, update gpuInfo to reflect this
   if (enabled) {
+    gpuInfo = gpuInfo || {};
+    gpuInfo.hasGpu = true;
     gpuInfo.canGenerateImages = true;
     gpuInfo.gpuVramGb = gpuInfo.gpuVramGb || 8; // Assume 8GB if unknown
+    gpuInfo.gpuName = gpuInfo.gpuName || 'Manual Override';
+    gpuInfo.detectionMethod = 'override';
   }
   saveConfig();
   sendStatusToRenderer();
@@ -2054,6 +2058,18 @@ app.whenReady().then(async () => {
   log('App starting...');
   loadConfig();
   await detectGpuInfo();
+  
+  // Apply GPU override from saved config if enabled
+  if (config.gpuOverrideEnabled) {
+    gpuInfo = gpuInfo || {};
+    gpuInfo.hasGpu = true;
+    gpuInfo.canGenerateImages = true;
+    gpuInfo.gpuVramGb = gpuInfo.gpuVramGb || 8;
+    gpuInfo.gpuName = gpuInfo.gpuName || 'Manual Override';
+    gpuInfo.detectionMethod = 'override';
+    log('GPU override applied from config');
+  }
+  
   createWindow();
   createTray();
   setupAutoUpdater();
