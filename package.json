@@ -1,6 +1,6 @@
 {
   "name": "computegrid-worker",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "ComputeGrid Worker Desktop App - Earn money by sharing your computing power",
   "main": "src/main.js",
   "homepage": "https://computegrid.app",
@@ -49,20 +49,26 @@
         "nsis",
         "portable"
       ],
-      "publisherName": "ComputeGrid"
+      "publisherName": "ComputeGrid",
+      "artifactName": "${productName}-${version}-Setup.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-Portable.${ext}"
     },
     "linux": {
       "target": [
         "AppImage"
       ],
-      "category": "Utility"
+      "category": "Utility",
+      "artifactName": "${productName}-${version}.${ext}"
     },
     "nsis": {
       "oneClick": true,
       "perMachine": false,
       "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "artifactName": "${productName}-${version}-Setup.${ext}"
     }
   }
 }

@@ -192,47 +192,33 @@ function logError(message, error) {
 }
 
 // Detect GPU capabilities
-// Detect GPU capabilities
 async function detectGpuInfo() {
   try {
     // Use platform-specific commands to detect GPU
     if (process.platform === 'win32') {
-      // Windows: Use WMIC with list format
+      // Windows: Use PowerShell for proper 64-bit VRAM values (WMIC uses 32-bit signed)
       const { execSync } = require('child_process');
       try {
-        // Get GPU info in list format for easier parsing
-        const result = execSync('wmic path win32_videocontroller get name,adapterram /format:list', { encoding: 'utf8' });
-        log('WMIC raw output: ' + result.replace(/\r?\n/g, '|'));
+        // PowerShell command that returns JSON with proper 64-bit VRAM
+        const psCommand = `powershell -NoProfile -Command "Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM | ConvertTo-Json -Compress"`;
+        const result = execSync(psCommand, { encoding: 'utf8', timeout: 10000 });
+        log('PowerShell GPU raw output: ' + result.trim());
         
-        // Parse by splitting on blank lines to get each GPU record
-        const records = result.split(/\r?\n\r?\n/).filter(r => r.trim());
-        const gpus = [];
-        
-        for (const record of records) {
-          const lines = record.split(/\r?\n/);
-          const gpu = { name: null, vramBytes: null };
-          
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (trimmed.startsWith('AdapterRAM=')) {
-              const vramStr = trimmed.split('=')[1];
-              // Handle negative, overflow, or missing values
-              let vram = parseInt(vramStr) || 0;
-              // WMIC can return 32-bit signed values, handle negative/overflow
-              if (vram < 0 || vram > 68719476736) { // > 64GB is suspicious
-                vram = 0;
-              }
-              gpu.vramBytes = vram;
-            } else if (trimmed.startsWith('Name=')) {
-              gpu.name = trimmed.split('=')[1] || '';
-            }
-          }
-          
-          // Only add if we got a name
-          if (gpu.name) {
-            gpus.push(gpu);
-          }
+        // Parse JSON result (can be array or single object)
+        let rawGpus = [];
+        try {
+          const parsed = JSON.parse(result.trim());
+          rawGpus = Array.isArray(parsed) ? parsed : [parsed];
+        } catch (jsonErr) {
+          log('JSON parse error, trying fallback: ' + jsonErr.message);
+          rawGpus = [];
         }
+        
+        // Convert to our GPU format
+        const gpus = rawGpus.filter(g => g && g.Name).map(g => ({
+          name: g.Name || '',
+          vramBytes: typeof g.AdapterRAM === 'number' ? g.AdapterRAM : 0
+        }));
         
         log('Parsed GPUs: ' + JSON.stringify(gpus));
         
@@ -286,7 +272,7 @@ async function detectGpuInfo() {
           };
           log('Selected GPU: ' + JSON.stringify(gpuInfo));
         } else {
-          log('No suitable GPU found in WMIC output');
+          log('No suitable GPU found in PowerShell output');
         }
       } catch (e) {
         log('GPU detection failed on Windows: ' + e.message);
@@ -1332,11 +1318,21 @@ async function startWorker() {
       
       isWorkerRunning = false;
       isOnline = false;
-      stats.status = code === 0 ? 'Stopped' : 'Crashed';
-      if (code !== 0 && code !== null) {
+      
+      // Check if this was a manual stop or a crash
+      if (manualStop) {
+        stats.status = 'Offline';
+        log('Worker stopped by user');
+      } else if (code === 0) {
+        stats.status = 'Stopped';
+      } else {
+        stats.status = 'Crashed';
+      }
+      
+      if (code !== 0 && code !== null && !manualStop) {
         logError(`Worker crashed with exit code ${code}`);
         // Auto-restart after crash (unless manually stopped)
-        if (config.apiKey && !manualStop) {
+        if (config.apiKey) {
           log('Auto-restarting worker in 5 seconds...');
           stats.status = 'Restarting...';
           sendStatusToRenderer();
