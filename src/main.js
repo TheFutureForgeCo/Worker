@@ -1767,9 +1767,10 @@ ipcMain.handle('open-external', (event, url) => {
 const IMAGE_AI_DIR = path.join(app.getPath('userData'), 'image-ai');
 const SD_MODEL_PATH = path.join(IMAGE_AI_DIR, 'sd-v1-5.safetensors');
 const PYTHON_DIR = path.join(IMAGE_AI_DIR, 'python');
+// python-build-standalone extracts to a 'python/' subfolder containing bin/
 const PYTHON_EXE = process.platform === 'win32' 
   ? path.join(PYTHON_DIR, 'python', 'python.exe')
-  : path.join(PYTHON_DIR, 'bin', 'python3');
+  : path.join(PYTHON_DIR, 'python', 'bin', 'python3');
 
 // Use a CDN mirror that doesn't require auth - civitai hosts many models
 const SD_MODEL_URL = 'https://civitai.com/api/download/models/11745'; // SD 1.5 base model
@@ -2049,9 +2050,10 @@ async function installPythonDeps() {
   log('[Deps] Installing Python dependencies...');
   
   return new Promise((resolve, reject) => {
+    // python-build-standalone extracts to a 'python/' subfolder
     const pipPath = process.platform === 'win32'
       ? path.join(PYTHON_DIR, 'python', 'Scripts', 'pip.exe')
-      : path.join(PYTHON_DIR, 'bin', 'pip3');
+      : path.join(PYTHON_DIR, 'python', 'bin', 'pip3');
     
     // Check if pip exists
     if (!fs.existsSync(pipPath)) {
