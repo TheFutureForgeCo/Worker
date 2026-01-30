@@ -486,6 +486,23 @@
       transition: width 0.3s ease;
     }
 
+    .mini-progress-bar {
+      height: 4px;
+      background: var(--bg-tertiary);
+      border-radius: 2px;
+      overflow: hidden;
+      width: 100%;
+      margin-top: 4px;
+      margin-bottom: 4px;
+    }
+
+    .mini-progress-fill {
+      height: 100%;
+      background: var(--primary);
+      border-radius: 2px;
+      transition: width 0.3s ease;
+    }
+
     .config-section {
       background: var(--bg-secondary);
       border-radius: var(--radius-lg);
@@ -932,6 +949,46 @@
             <div class="settings-item-subtitle">Keep running when window is closed</div>
           </div>
           <div class="toggle-switch" id="minimizeToTraySwitch"></div>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <div class="settings-group-title">Image Generation AI</div>
+        <div class="settings-item" id="imageAiToggle">
+          <div class="settings-item-icon">&#127912;</div>
+          <div class="settings-item-content">
+            <div class="settings-item-title">Enable Image Generation</div>
+            <div class="settings-item-subtitle" id="imageAiStatus">Requires 6GB+ GPU VRAM</div>
+          </div>
+          <div class="toggle-switch" id="imageAiSwitch"></div>
+        </div>
+        <div class="settings-item" id="downloadImageAiBtn" style="display: none;">
+          <div class="settings-item-icon">&#128229;</div>
+          <div class="settings-item-content">
+            <div class="settings-item-title">Download Image AI Model</div>
+            <div class="settings-item-subtitle" id="imageAiDownloadStatus">~4GB - Stable Diffusion</div>
+          </div>
+          <div class="settings-item-action" id="imageAiAction">&rsaquo;</div>
+        </div>
+        <div class="settings-item" id="imageAiProgress" style="display: none;">
+          <div class="settings-item-icon">&#128230;</div>
+          <div class="settings-item-content">
+            <div class="settings-item-title">Downloading Image AI...</div>
+            <div class="settings-item-subtitle">
+              <div class="mini-progress-bar">
+                <div class="mini-progress-fill" id="imageAiProgressFill" style="width: 0%;"></div>
+              </div>
+              <span id="imageAiProgressText">0%</span>
+            </div>
+          </div>
+        </div>
+        <div class="settings-item danger" id="uninstallImageAiBtn" style="display: none;">
+          <div class="settings-item-icon">&#128465;</div>
+          <div class="settings-item-content">
+            <div class="settings-item-title">Remove Image AI</div>
+            <div class="settings-item-subtitle">Delete model and free up space</div>
+          </div>
+          <div class="settings-item-action">&rsaquo;</div>
         </div>
       </div>
 

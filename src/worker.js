@@ -60,6 +60,7 @@ const RECONNECT_DELAY_MS = 10000;
 const OLLAMA_HOST = 'http://127.0.0.1:11434';
 const DEFAULT_MODEL = 'mistral';
 const FALLBACK_MODEL = 'tinyllama';
+const IMAGE_MODEL = 'stable-diffusion';
 
 // Integrity verification state
 let pendingChallengeId = null;
@@ -72,6 +73,19 @@ let ollamaReady = false;
 let activeModel = DEFAULT_MODEL;
 let connectionFailed = false;
 let lastError = null;
+
+// GPU capabilities
+let gpuInfo = {
+  hasGpu: false,
+  gpuModel: null,
+  gpuVramGb: 0,
+  canGenerateImages: false
+};
+
+// Region detection
+let workerRegion = null;
+let workerCountryCode = null;
+let internetSpeedMbps = 0;
 
 let stats = {
   tasksCompleted: 0,
@@ -108,6 +122,152 @@ function sendError(error) {
     }
   } catch (e) {
     logToFile(`Failed to send error: ${e.message}`);
+  }
+}
+
+// Detect GPU capabilities
+async function detectGpuCapabilities() {
+  log('Detecting GPU capabilities...');
+  
+  try {
+    // On Windows, use wmic to detect GPU
+    if (process.platform === 'win32') {
+      const { execSync } = require('child_process');
+      
+      // Get GPU info using wmic
+      const wmicOutput = execSync('wmic path win32_videocontroller get name,adapterram', { encoding: 'utf8' });
+      const lines = wmicOutput.trim().split('\n').slice(1).filter(l => l.trim());
+      
+      for (const line of lines) {
+        const match = line.match(/(.+?)\s+(\d+)/);
+        if (match) {
+          const gpuName = match[1].trim();
+          const vramBytes = parseInt(match[2], 10);
+          const vramGb = Math.round(vramBytes / (1024 * 1024 * 1024));
+          
+          // Check if it's a discrete GPU (NVIDIA or AMD)
+          if (gpuName.toLowerCase().includes('nvidia') || gpuName.toLowerCase().includes('radeon') || gpuName.toLowerCase().includes('geforce')) {
+            gpuInfo.hasGpu = true;
+            gpuInfo.gpuModel = gpuName;
+            gpuInfo.gpuVramGb = vramGb;
+            gpuInfo.canGenerateImages = vramGb >= 6;
+            log(`GPU detected: ${gpuName} with ${vramGb}GB VRAM, can generate images: ${gpuInfo.canGenerateImages}`);
+            break;
+          }
+        }
+      }
+    }
+    // On Linux, use nvidia-smi if available
+    else if (process.platform === 'linux') {
+      const { execSync } = require('child_process');
+      
+      try {
+        const nvidiaOutput = execSync('nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits', { encoding: 'utf8' });
+        const [gpuName, memMb] = nvidiaOutput.trim().split(',').map(s => s.trim());
+        const vramGb = Math.round(parseInt(memMb, 10) / 1024);
+        
+        gpuInfo.hasGpu = true;
+        gpuInfo.gpuModel = gpuName;
+        gpuInfo.gpuVramGb = vramGb;
+        gpuInfo.canGenerateImages = vramGb >= 6;
+        log(`GPU detected: ${gpuName} with ${vramGb}GB VRAM, can generate images: ${gpuInfo.canGenerateImages}`);
+      } catch {
+        // nvidia-smi not available, check for AMD
+        try {
+          const lspciOutput = execSync('lspci | grep -i vga', { encoding: 'utf8' });
+          if (lspciOutput.toLowerCase().includes('amd') || lspciOutput.toLowerCase().includes('radeon')) {
+            gpuInfo.hasGpu = true;
+            gpuInfo.gpuModel = lspciOutput.split(':').pop()?.trim() || 'AMD GPU';
+            // Can't reliably detect VRAM on AMD without specific tools
+            gpuInfo.gpuVramGb = 0;
+            gpuInfo.canGenerateImages = false;
+            log(`AMD GPU detected: ${gpuInfo.gpuModel} (VRAM detection not supported)`);
+          }
+        } catch {
+          log('No discrete GPU detected');
+        }
+      }
+    }
+  } catch (err) {
+    log(`GPU detection error: ${err.message}`);
+  }
+  
+  if (!gpuInfo.hasGpu) {
+    log('No suitable GPU found - image generation will not be available');
+  }
+  
+  return gpuInfo;
+}
+
+// Detect region using IP geolocation
+async function detectRegion() {
+  log('Detecting region...');
+  
+  try {
+    const response = await makeRequest('https://ipapi.co/json/', { timeout: 10000 });
+    
+    if (response.status === 200 && response.data) {
+      workerRegion = response.data.region || response.data.continent_code || 'unknown';
+      workerCountryCode = response.data.country_code || '';
+      log(`Region detected: ${workerRegion}, Country: ${workerCountryCode}`);
+    }
+  } catch (err) {
+    log(`Region detection error (non-fatal): ${err.message}`);
+  }
+}
+
+// Test internet speed (simple download test)
+async function testInternetSpeed() {
+  log('Testing internet speed...');
+  
+  try {
+    const startTime = Date.now();
+    // Download a small file to estimate speed
+    const response = await makeRequest('https://www.cloudflare.com/cdn-cgi/trace', { timeout: 10000 });
+    const endTime = Date.now();
+    
+    if (response.status === 200) {
+      const durationMs = endTime - startTime;
+      // Rough estimate based on typical response size (~500 bytes) and round trip
+      internetSpeedMbps = Math.min(100, Math.round(500 * 8 / durationMs)); // Very rough estimate
+      log(`Internet speed estimate: ~${internetSpeedMbps} Mbps`);
+    }
+  } catch (err) {
+    log(`Speed test error (non-fatal): ${err.message}`);
+    internetSpeedMbps = 10; // Default fallback
+  }
+}
+
+// Report capabilities to server
+async function reportCapabilities() {
+  log('Reporting capabilities to server...');
+  
+  try {
+    const systemInfo = {
+      hasGpu: gpuInfo.hasGpu,
+      gpuModel: gpuInfo.gpuModel,
+      gpuVramGb: gpuInfo.gpuVramGb,
+      region: workerRegion,
+      countryCode: workerCountryCode,
+      internetSpeedMbps,
+      cpuCores: os.cpus().length,
+      memoryGb: Math.round(os.totalmem() / (1024 * 1024 * 1024))
+    };
+    
+    const response = await makeRequest(`${SERVER_URL}/api/worker/capabilities`, {
+      method: 'POST',
+      timeout: 15000,
+      body: systemInfo
+    });
+    
+    if (response.status === 200) {
+      log('Capabilities reported successfully');
+      log(`Server response: ${JSON.stringify(response.data)}`);
+    } else {
+      log(`Capabilities report failed: ${response.status}`);
+    }
+  } catch (err) {
+    log(`Capabilities report error: ${err.message}`);
   }
 }
 
@@ -421,6 +581,179 @@ async function completeTask(taskId, result, actualTokens = 0) {
   return false;
 }
 
+// Stable Diffusion API configuration
+const SD_API_HOST = 'http://127.0.0.1:7860'; // Default automatic1111 webui port
+let sdServerReady = false;
+
+// Check if Stable Diffusion server is running
+async function checkSdServer() {
+  return new Promise((resolve) => {
+    const http = require('http');
+    const req = http.get(`${SD_API_HOST}/sdapi/v1/options`, { timeout: 2000 }, (res) => {
+      sdServerReady = res.statusCode === 200;
+      resolve(sdServerReady);
+    });
+    req.on('error', () => {
+      sdServerReady = false;
+      resolve(false);
+    });
+    req.on('timeout', () => {
+      req.destroy();
+      sdServerReady = false;
+      resolve(false);
+    });
+  });
+}
+
+// Generate image using Stable Diffusion API
+async function callStableDiffusionApi(prompt, width, height, seed, tileX, tileY, totalTilesX, totalTilesY) {
+  return new Promise((resolve, reject) => {
+    const http = require('http');
+    
+    // Adjust the prompt for regional generation (tiling hint)
+    const regionHint = totalTilesX > 1 || totalTilesY > 1 
+      ? `, seamless tile, region ${tileX + 1}/${totalTilesX} horizontal ${tileY + 1}/${totalTilesY} vertical`
+      : '';
+    const fullPrompt = prompt + regionHint;
+    
+    const requestData = JSON.stringify({
+      prompt: fullPrompt,
+      negative_prompt: "blurry, low quality, distorted, watermark, text, artifacts",
+      width: width,
+      height: height,
+      seed: seed,
+      steps: 20,
+      cfg_scale: 7,
+      sampler_name: "DPM++ 2M Karras",
+      n_iter: 1,
+      batch_size: 1
+    });
+    
+    const options = {
+      hostname: '127.0.0.1',
+      port: 7860,
+      path: '/sdapi/v1/txt2img',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(requestData)
+      },
+      timeout: 120000 // 2 minutes timeout for image generation
+    };
+    
+    const req = http.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const response = JSON.parse(data);
+          if (response.images && response.images.length > 0) {
+            resolve({
+              success: true,
+              imageData: response.images[0], // Base64 encoded PNG
+              seed: response.info ? JSON.parse(response.info).seed : seed
+            });
+          } else {
+            reject(new Error('No images in response'));
+          }
+        } catch (e) {
+          reject(new Error(`Failed to parse SD response: ${e.message}`));
+        }
+      });
+    });
+    
+    req.on('error', reject);
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('SD API request timeout'));
+    });
+    
+    req.write(requestData);
+    req.end();
+  });
+}
+
+// Generate image tile using Stable Diffusion via local API
+async function generateImageTile(taskData) {
+  log(`Generating image tile [${taskData.tileX},${taskData.tileY}]...`);
+  
+  if (!gpuInfo.canGenerateImages) {
+    return {
+      type: 'image_tile',
+      tileX: taskData.tileX,
+      tileY: taskData.tileY,
+      error: 'GPU not capable of image generation',
+      imageData: null
+    };
+  }
+  
+  try {
+    const prompt = taskData.imagePrompt || 'test image';
+    const seed = taskData.imageSeed || Math.floor(Math.random() * 2147483647);
+    const tileX = taskData.tileX || 0;
+    const tileY = taskData.tileY || 0;
+    const totalTilesX = taskData.totalTilesX || 2;
+    const totalTilesY = taskData.totalTilesY || 2;
+    const tileWidth = taskData.imageWidth || 512;
+    const tileHeight = taskData.imageHeight || 512;
+    
+    log(`Tile params: prompt="${prompt.substring(0, 50)}...", seed=${seed}, position=[${tileX},${tileY}], size=${tileWidth}x${tileHeight}`);
+    
+    // Check if SD server is available
+    const serverReady = await checkSdServer();
+    
+    if (!serverReady) {
+      log('Stable Diffusion server not running - returning placeholder');
+      return {
+        type: 'image_tile',
+        tileX,
+        tileY,
+        totalTilesX,
+        totalTilesY,
+        width: tileWidth,
+        height: tileHeight,
+        imageData: null,
+        prompt,
+        seed,
+        error: 'Stable Diffusion server not running. Please start the SD WebUI or ComfyUI server.'
+      };
+    }
+    
+    // Call the Stable Diffusion API
+    log(`Calling Stable Diffusion API for tile [${tileX},${tileY}]...`);
+    const sdResult = await callStableDiffusionApi(
+      prompt, tileWidth, tileHeight, seed,
+      tileX, tileY, totalTilesX, totalTilesY
+    );
+    
+    const result = {
+      type: 'image_tile',
+      tileX,
+      tileY,
+      totalTilesX,
+      totalTilesY,
+      width: tileWidth,
+      height: tileHeight,
+      imageData: sdResult.imageData,
+      prompt,
+      seed: sdResult.seed,
+      error: null
+    };
+    
+    log(`Image tile [${tileX},${tileY}] generation complete, size: ${sdResult.imageData ? sdResult.imageData.length : 0} bytes`);
+    return result;
+  } catch (err) {
+    log(`Image generation error: ${err.message}`);
+    return {
+      type: 'image_tile',
+      tileX: taskData.tileX,
+      tileY: taskData.tileY,
+      error: err.message,
+      imageData: null
+    };
+  }
+}
+
 // Process a task
 async function processTask(task) {
   log(`Processing task ${task.id}: ${task.taskType}`);
@@ -429,17 +762,24 @@ async function processTask(task) {
   let tokens = 0;
 
   try {
-    if (task.taskType === 'chat' || task.taskType === 'inference') {
-      // Extract prompt from task data
-      let taskData = {};
-      try {
-        taskData = typeof task.inputData === 'string' 
-          ? JSON.parse(task.inputData) 
-          : (task.inputData || task.taskData || {});
-      } catch {
-        taskData = {};
-      }
-      
+    // Extract task data
+    let taskData = {};
+    try {
+      taskData = typeof task.inputData === 'string' 
+        ? JSON.parse(task.inputData) 
+        : (task.inputData || task.taskData || {});
+    } catch {
+      taskData = {};
+    }
+    
+    // Handle image generation tasks
+    if (task.taskType === 'image_generation') {
+      const imageResult = await generateImageTile(taskData);
+      result = JSON.stringify(imageResult);
+      tokens = 0; // Images don't have tokens
+    }
+    // Handle chat/inference tasks
+    else if (task.taskType === 'chat' || task.taskType === 'inference') {
       const prompt = taskData.userMessage || taskData.prompt || taskData.message || 'Hello';
       const systemPrompt = taskData.systemPrompt || '';
       
@@ -633,11 +973,32 @@ async function mainLoop() {
     }
   }
 
+  // Detect hardware capabilities in parallel (non-blocking)
+  try {
+    await Promise.all([
+      detectGpuCapabilities(),
+      detectRegion(),
+      testInternetSpeed()
+    ]);
+    log(`Hardware detection complete: GPU=${gpuInfo.hasGpu}, Region=${workerRegion}, Speed=${internetSpeedMbps}Mbps`);
+  } catch (err) {
+    log(`Hardware detection error (non-fatal): ${err.message}`);
+  }
+  
   // Try to setup Ollama (non-blocking, non-fatal)
   try {
     await setupOllama();
   } catch (err) {
     log(`Ollama setup failed (continuing without AI): ${err.message}`);
+  }
+  
+  // Report capabilities to server after detection
+  if (connected) {
+    try {
+      await reportCapabilities();
+    } catch (err) {
+      log(`Capabilities report error (non-fatal): ${err.message}`);
+    }
   }
   
   stats.status = connected ? 'Running' : 'Reconnecting...';

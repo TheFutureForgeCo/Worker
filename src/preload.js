@@ -38,6 +38,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // External links
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   
+  // Image AI management
+  setImageAiEnabled: (enabled) => ipcRenderer.invoke('set-image-ai-enabled', enabled),
+  downloadImageAi: () => ipcRenderer.invoke('download-image-ai'),
+  cancelImageAiDownload: () => ipcRenderer.invoke('cancel-image-ai-download'),
+  uninstallImageAi: () => ipcRenderer.invoke('uninstall-image-ai'),
+  
   // Event listeners
   onStatusUpdate: (callback) => {
     ipcRenderer.on('status-update', (event, data) => callback(data));
@@ -47,5 +53,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   onUpdateStatus: (callback) => {
     ipcRenderer.on('update-status', (event, data) => callback(data));
+  },
+  onImageAiProgress: (callback) => {
+    ipcRenderer.on('image-ai-progress', (event, progress) => callback(progress));
+  },
+  onImageAiError: (callback) => {
+    ipcRenderer.on('image-ai-error', (event, error) => callback(error));
   }
 });

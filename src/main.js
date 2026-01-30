@@ -173,6 +173,7 @@ let isOnline = false;
 let manualStop = false; // Track if worker was manually stopped (vs crashed)
 let lastWorkerActivity = Date.now();
 let watchdogInterval = null;
+let gpuInfo = { hasGpu: false, gpuVramGb: 0, canGenerateImages: false };
 const WATCHDOG_TIMEOUT_MS = 60000; // 60 seconds without activity = unresponsive
 const WATCHDOG_CHECK_INTERVAL_MS = 15000; // Check every 15 seconds
 
@@ -190,6 +191,81 @@ function logError(message, error) {
   sendStatusToRenderer();
 }
 
+// Detect GPU capabilities
+async function detectGpuInfo() {
+  try {
+    // Use platform-specific commands to detect GPU
+    if (process.platform === 'win32') {
+      // Windows: Use WMIC
+      const { execSync } = require('child_process');
+      try {
+        const result = execSync('wmic path win32_videocontroller get name,adapterram', { encoding: 'utf8' });
+        const lines = result.trim().split('\n').filter(l => l.trim());
+        if (lines.length > 1) {
+          // Parse the result
+          const gpuLine = lines[1].trim();
+          const hasNvidia = gpuLine.toLowerCase().includes('nvidia');
+          const hasAmd = gpuLine.toLowerCase().includes('amd') || gpuLine.toLowerCase().includes('radeon');
+          
+          // Try to extract VRAM
+          const vramMatch = gpuLine.match(/(\d+)/);
+          const vramBytes = vramMatch ? parseInt(vramMatch[1]) : 0;
+          const vramGb = vramBytes / (1024 * 1024 * 1024);
+          
+          gpuInfo = {
+            hasGpu: hasNvidia || hasAmd,
+            gpuVramGb: Math.round(vramGb),
+            canGenerateImages: (hasNvidia || hasAmd) && vramGb >= 6,
+            gpuName: gpuLine.split(/\s{2,}/)[0] || 'Unknown'
+          };
+        }
+      } catch (e) {
+        log('GPU detection failed on Windows: ' + e.message);
+      }
+    } else if (process.platform === 'linux') {
+      // Linux: Try nvidia-smi or lspci
+      const { execSync } = require('child_process');
+      try {
+        // Try nvidia-smi first
+        const result = execSync('nvidia-smi --query-gpu=name,memory.total --format=csv,noheader', { encoding: 'utf8' });
+        const parts = result.trim().split(',');
+        if (parts.length >= 2) {
+          const vramMatch = parts[1].match(/(\d+)/);
+          const vramMb = vramMatch ? parseInt(vramMatch[1]) : 0;
+          const vramGb = vramMb / 1024;
+          
+          gpuInfo = {
+            hasGpu: true,
+            gpuVramGb: Math.round(vramGb),
+            canGenerateImages: vramGb >= 6,
+            gpuName: parts[0].trim()
+          };
+        }
+      } catch (e) {
+        // No nvidia-smi, try lspci
+        try {
+          const result = execSync('lspci | grep -i vga', { encoding: 'utf8' });
+          const hasNvidia = result.toLowerCase().includes('nvidia');
+          const hasAmd = result.toLowerCase().includes('amd') || result.toLowerCase().includes('radeon');
+          
+          gpuInfo = {
+            hasGpu: hasNvidia || hasAmd,
+            gpuVramGb: 0, // Can't detect VRAM from lspci
+            canGenerateImages: false, // Unknown VRAM
+            gpuName: result.split(':').pop()?.trim() || 'Unknown'
+          };
+        } catch (e2) {
+          log('GPU detection failed on Linux');
+        }
+      }
+    }
+    
+    log(`GPU detected: ${JSON.stringify(gpuInfo)}`);
+  } catch (err) {
+    log('GPU detection error: ' + err.message);
+  }
+}
+
 // Load configuration
 function loadConfig() {
   try {
@@ -197,6 +273,21 @@ function loadConfig() {
       const data = fs.readFileSync(CONFIG_PATH, 'utf8');
       config = { ...config, ...JSON.parse(data) };
       log('Config loaded successfully');
+    }
+    
+    // Verify Image AI installation status by checking if model file exists
+    const imageAiDir = path.join(DATA_DIR, 'image-ai');
+    const sdModelPath = path.join(imageAiDir, 'sd-v1-5.safetensors');
+    const modelExists = fs.existsSync(sdModelPath);
+    
+    if (config.imageAiInstalled && !modelExists) {
+      log('Image AI model not found, updating config');
+      config.imageAiInstalled = false;
+      saveConfig();
+    } else if (!config.imageAiInstalled && modelExists) {
+      log('Image AI model found, updating config');
+      config.imageAiInstalled = true;
+      saveConfig();
     }
   } catch (err) {
     logError('Failed to load config', err);
@@ -1371,7 +1462,11 @@ ipcMain.handle('get-status', () => ({
   ollamaDownloadProgress,
   setupPhase,
   setupProgress,
-  lastError
+  lastError,
+  // Image AI status
+  gpuInfo: gpuInfo || { hasGpu: false, gpuVramGb: 0, canGenerateImages: false },
+  imageAiInstalled: config.imageAiInstalled || false,
+  imageAiEnabled: config.imageAiEnabled || false
 }));
 
 ipcMain.handle('save-config', async (event, newConfig) => {
@@ -1441,6 +1536,165 @@ ipcMain.handle('delete-model', async (event, modelName) => {
 
 ipcMain.handle('open-external', (event, url) => {
   shell.openExternal(url);
+});
+
+// Image AI management
+const IMAGE_AI_DIR = path.join(DATA_DIR, 'image-ai');
+const SD_MODEL_PATH = path.join(IMAGE_AI_DIR, 'sd-v1-5.safetensors');
+const SD_MODEL_URL = 'https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors';
+const SD_MODEL_SIZE_BYTES = 4265380512; // ~4GB
+
+let imageAiDownloadController = null;
+
+ipcMain.handle('set-image-ai-enabled', async (event, enabled) => {
+  config.imageAiEnabled = enabled;
+  saveConfig();
+  sendStatusToRenderer();
+  return true;
+});
+
+ipcMain.handle('download-image-ai', async () => {
+  log('Starting Image AI download...');
+  
+  try {
+    // Create directory if it doesn't exist
+    if (!fs.existsSync(IMAGE_AI_DIR)) {
+      fs.mkdirSync(IMAGE_AI_DIR, { recursive: true });
+    }
+    
+    // Check if already downloading
+    if (imageAiDownloadController) {
+      log('Image AI download already in progress');
+      return false;
+    }
+    
+    // Start download with progress tracking
+    const https = require('https');
+    const http = require('http');
+    
+    return new Promise((resolve, reject) => {
+      const tempPath = SD_MODEL_PATH + '.tmp';
+      const file = fs.createWriteStream(tempPath);
+      let downloadedBytes = 0;
+      let lastProgressUpdate = 0;
+      
+      const downloadUrl = SD_MODEL_URL;
+      const protocol = downloadUrl.startsWith('https') ? https : http;
+      
+      log(`Downloading from: ${downloadUrl}`);
+      
+      const request = protocol.get(downloadUrl, { 
+        headers: { 'User-Agent': 'ComputeGrid-Worker/1.3.0' }
+      }, (response) => {
+        // Handle redirects
+        if (response.statusCode === 301 || response.statusCode === 302) {
+          const redirectUrl = response.headers.location;
+          log(`Redirecting to: ${redirectUrl}`);
+          file.close();
+          fs.unlinkSync(tempPath);
+          
+          // Follow redirect
+          const redirectProtocol = redirectUrl.startsWith('https') ? https : http;
+          redirectProtocol.get(redirectUrl, { 
+            headers: { 'User-Agent': 'ComputeGrid-Worker/1.3.0' }
+          }, handleResponse).on('error', handleError);
+          return;
+        }
+        
+        handleResponse(response);
+      });
+      
+      function handleResponse(response) {
+        const totalBytes = parseInt(response.headers['content-length'], 10) || SD_MODEL_SIZE_BYTES;
+        log(`Download started, total size: ${(totalBytes / 1024 / 1024 / 1024).toFixed(2)}GB`);
+        
+        response.pipe(file);
+        
+        response.on('data', (chunk) => {
+          downloadedBytes += chunk.length;
+          const progress = Math.floor((downloadedBytes / totalBytes) * 100);
+          
+          // Update progress every 1%
+          if (progress > lastProgressUpdate) {
+            lastProgressUpdate = progress;
+            if (mainWindow) {
+              mainWindow.webContents.send('image-ai-progress', progress);
+            }
+            if (progress % 10 === 0) {
+              log(`Image AI download: ${progress}% (${(downloadedBytes / 1024 / 1024).toFixed(0)}MB / ${(totalBytes / 1024 / 1024).toFixed(0)}MB)`);
+            }
+          }
+        });
+        
+        response.on('end', () => {
+          file.close(() => {
+            // Rename temp file to final
+            fs.renameSync(tempPath, SD_MODEL_PATH);
+            config.imageAiInstalled = true;
+            saveConfig();
+            sendStatusToRenderer();
+            log('Image AI download complete');
+            imageAiDownloadController = null;
+            resolve(true);
+          });
+        });
+      }
+      
+      function handleError(err) {
+        file.close();
+        if (fs.existsSync(tempPath)) {
+          fs.unlinkSync(tempPath);
+        }
+        log(`Image AI download failed: ${err.message}`);
+        if (mainWindow) {
+          mainWindow.webContents.send('image-ai-error', err.message);
+        }
+        imageAiDownloadController = null;
+        reject(err);
+      }
+      
+      request.on('error', handleError);
+      
+      imageAiDownloadController = request;
+    });
+  } catch (err) {
+    log(`Image AI download failed: ${err.message}`);
+    imageAiDownloadController = null;
+    return false;
+  }
+});
+
+ipcMain.handle('cancel-image-ai-download', async () => {
+  if (imageAiDownloadController) {
+    imageAiDownloadController.destroy();
+    imageAiDownloadController = null;
+    log('Image AI download cancelled');
+    return true;
+  }
+  return false;
+});
+
+ipcMain.handle('uninstall-image-ai', async () => {
+  log('Uninstalling Image AI...');
+  try {
+    // Delete the Stable Diffusion model files
+    if (fs.existsSync(SD_MODEL_PATH)) {
+      fs.unlinkSync(SD_MODEL_PATH);
+      log('Deleted SD model file');
+    }
+    if (fs.existsSync(IMAGE_AI_DIR)) {
+      fs.rmdirSync(IMAGE_AI_DIR, { recursive: true });
+      log('Deleted Image AI directory');
+    }
+    config.imageAiInstalled = false;
+    saveConfig();
+    sendStatusToRenderer();
+    log('Image AI uninstalled');
+    return true;
+  } catch (err) {
+    log(`Image AI uninstall failed: ${err.message}`);
+    return false;
+  }
 });
 
 ipcMain.handle('get-server-url', () => SERVER_URL);
@@ -1596,9 +1850,10 @@ function setupAutoUpdater() {
 }
 
 // App initialization
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   log('App starting...');
   loadConfig();
+  await detectGpuInfo();
   createWindow();
   createTray();
   setupAutoUpdater();

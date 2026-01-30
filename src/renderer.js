@@ -56,6 +56,17 @@ const aboutBtn = document.getElementById('aboutBtn');
 const uninstallBtn = document.getElementById('uninstallBtn');
 const backBtn = document.getElementById('backBtn');
 
+// DOM Elements - Image AI Section
+const imageAiToggle = document.getElementById('imageAiToggle');
+const imageAiSwitch = document.getElementById('imageAiSwitch');
+const imageAiStatus = document.getElementById('imageAiStatus');
+const downloadImageAiBtn = document.getElementById('downloadImageAiBtn');
+const imageAiDownloadStatus = document.getElementById('imageAiDownloadStatus');
+const imageAiProgress = document.getElementById('imageAiProgress');
+const imageAiProgressFill = document.getElementById('imageAiProgressFill');
+const imageAiProgressText = document.getElementById('imageAiProgressText');
+const uninstallImageAiBtn = document.getElementById('uninstallImageAiBtn');
+
 // DOM Elements - About Page
 const aboutBackBtn = document.getElementById('aboutBackBtn');
 const openGithubBtn = document.getElementById('openGithubBtn');
@@ -452,9 +463,177 @@ if (openLogsFolderBtn) {
   });
 }
 
+// ============================================================
+// IMAGE AI SECTION
+// ============================================================
+
+let imageAiEnabled = false;
+let imageAiInstalled = false;
+let canGenerateImages = false;
+
+// Update Image AI UI based on status
+function updateImageAiUI(status) {
+  const gpuInfo = status.gpuInfo || {};
+  canGenerateImages = gpuInfo.canGenerateImages || false;
+  imageAiInstalled = status.imageAiInstalled || false;
+  imageAiEnabled = status.imageAiEnabled || false;
+  
+  // Update status text
+  if (imageAiStatus) {
+    if (!gpuInfo.hasGpu) {
+      imageAiStatus.textContent = 'No compatible GPU detected';
+    } else if (gpuInfo.gpuVramGb < 6) {
+      imageAiStatus.textContent = `GPU has ${gpuInfo.gpuVramGb}GB VRAM (need 6GB+)`;
+    } else {
+      imageAiStatus.textContent = imageAiEnabled ? 'Enabled' : 'Disabled';
+    }
+  }
+  
+  // Update toggle switch
+  if (imageAiSwitch) {
+    imageAiSwitch.classList.toggle('active', imageAiEnabled);
+    // Disable toggle if GPU not capable
+    imageAiToggle.style.opacity = canGenerateImages ? '1' : '0.5';
+    imageAiToggle.style.pointerEvents = canGenerateImages ? 'auto' : 'none';
+  }
+  
+  // Show/hide download button
+  if (downloadImageAiBtn) {
+    downloadImageAiBtn.style.display = (canGenerateImages && !imageAiInstalled && imageAiEnabled) ? 'flex' : 'none';
+  }
+  
+  // Show/hide uninstall button
+  if (uninstallImageAiBtn) {
+    uninstallImageAiBtn.style.display = imageAiInstalled ? 'flex' : 'none';
+  }
+  
+  // Update download status
+  if (imageAiDownloadStatus && imageAiInstalled) {
+    imageAiDownloadStatus.textContent = 'Installed';
+  }
+}
+
+// Toggle Image AI
+if (imageAiToggle) {
+  imageAiToggle.addEventListener('click', async () => {
+    if (!canGenerateImages) return;
+    
+    imageAiEnabled = !imageAiEnabled;
+    imageAiSwitch.classList.toggle('active', imageAiEnabled);
+    
+    await window.electronAPI.setImageAiEnabled(imageAiEnabled);
+    
+    // Show download button if enabled but not installed
+    if (downloadImageAiBtn) {
+      downloadImageAiBtn.style.display = (imageAiEnabled && !imageAiInstalled) ? 'flex' : 'none';
+    }
+  });
+}
+
+// Download Image AI
+let isDownloadingImageAi = false;
+
+if (downloadImageAiBtn) {
+  downloadImageAiBtn.addEventListener('click', async () => {
+    if (isDownloadingImageAi) {
+      // Cancel download
+      await window.electronAPI.cancelImageAiDownload();
+      isDownloadingImageAi = false;
+      imageAiProgress.style.display = 'none';
+      downloadImageAiBtn.style.display = 'flex';
+      if (imageAiDownloadStatus) {
+        imageAiDownloadStatus.textContent = '~4GB - Stable Diffusion';
+      }
+      return;
+    }
+    
+    // Start download
+    isDownloadingImageAi = true;
+    downloadImageAiBtn.style.display = 'none';
+    imageAiProgress.style.display = 'flex';
+    
+    try {
+      const result = await window.electronAPI.downloadImageAi();
+      if (!result) {
+        // Download failed
+        isDownloadingImageAi = false;
+        imageAiProgress.style.display = 'none';
+        downloadImageAiBtn.style.display = 'flex';
+        if (imageAiDownloadStatus) {
+          imageAiDownloadStatus.textContent = 'Download failed - try again';
+        }
+      }
+    } catch (err) {
+      isDownloadingImageAi = false;
+      imageAiProgress.style.display = 'none';
+      downloadImageAiBtn.style.display = 'flex';
+      if (imageAiDownloadStatus) {
+        imageAiDownloadStatus.textContent = 'Download failed - try again';
+      }
+    }
+  });
+}
+
+// Uninstall Image AI
+if (uninstallImageAiBtn) {
+  uninstallImageAiBtn.addEventListener('click', async () => {
+    if (confirm('This will remove the Image AI model and free up ~4GB of space. Continue?')) {
+      await window.electronAPI.uninstallImageAi();
+      imageAiInstalled = false;
+      uninstallImageAiBtn.style.display = 'none';
+      if (imageAiDownloadStatus) {
+        imageAiDownloadStatus.textContent = '~4GB - Stable Diffusion';
+      }
+      if (imageAiEnabled && downloadImageAiBtn) {
+        downloadImageAiBtn.style.display = 'flex';
+      }
+    }
+  });
+}
+
+// Listen for Image AI download progress
+if (window.electronAPI.onImageAiProgress) {
+  window.electronAPI.onImageAiProgress((progress) => {
+    if (imageAiProgressFill) {
+      imageAiProgressFill.style.width = `${progress}%`;
+    }
+    if (imageAiProgressText) {
+      imageAiProgressText.textContent = `${progress}%`;
+    }
+    
+    // Download complete
+    if (progress >= 100) {
+      setTimeout(() => {
+        isDownloadingImageAi = false;
+        imageAiProgress.style.display = 'none';
+        imageAiInstalled = true;
+        if (uninstallImageAiBtn) {
+          uninstallImageAiBtn.style.display = 'flex';
+        }
+        if (imageAiDownloadStatus) {
+          imageAiDownloadStatus.textContent = 'Installed - Start SD WebUI to generate';
+        }
+      }, 500);
+    }
+  });
+}
+
+// Listen for Image AI download errors
+if (window.electronAPI.onImageAiError) {
+  window.electronAPI.onImageAiError((error) => {
+    isDownloadingImageAi = false;
+    imageAiProgress.style.display = 'none';
+    downloadImageAiBtn.style.display = 'flex';
+    if (imageAiDownloadStatus) {
+      imageAiDownloadStatus.textContent = `Error: ${error.substring(0, 30)}...`;
+    }
+  });
+}
+
 // Listen for status updates from main process
 window.electronAPI.onStatusUpdate((status) => {
   updateUI(status);
+  updateImageAiUI(status);
 });
 
 // Listen for navigation from main process (e.g., tray menu)
