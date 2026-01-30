@@ -1103,17 +1103,24 @@ async function startWorker() {
       log('Failed to write main log file: ' + e.message);
     }
     
-    earlyLog(`Spawning worker with: ${process.execPath} ${workerScript}`);
-    workerProcess = spawn(process.execPath, [workerScript], {
+    earlyLog(`Spawning worker with fork(): ${workerScript}`);
+    
+    // Use fork() instead of spawn() - fork is designed for Node.js child processes
+    // and works correctly in packaged Electron apps
+    const { fork } = require('child_process');
+    
+    workerProcess = fork(workerScript, [], {
       env: {
         ...process.env,
         CG_API_KEY: config.apiKey,
         CG_SERVER_URL: SERVER_URL,
         CG_APP_VERSION: APP_VERSION,
         CG_APP_SIGNATURE: appSignature,
-        CG_LOG_DIR: logDir
+        CG_LOG_DIR: logDir,
+        ELECTRON_RUN_AS_NODE: '1'  // Critical: tells Electron to run as Node.js
       },
-      stdio: ['pipe', 'pipe', 'pipe', 'ipc']
+      stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
+      execPath: process.execPath  // Use Electron's Node.js runtime
     });
     
     earlyLog(`Worker process started (PID: ${workerProcess.pid})`);
