@@ -191,95 +191,169 @@ function logError(message, error) {
   sendStatusToRenderer();
 }
 
+// Helper: Find best GPU from array of {name, vramBytes}
+function findBestGpu(gpus) {
+  let bestGpu = null;
+  
+  for (const gpu of gpus) {
+    const name = gpu.name.toLowerCase();
+    const isNvidia = name.includes('nvidia');
+    const isAmd = name.includes('amd') || name.includes('radeon');
+    const isIntel = name.includes('intel');
+    const isMicrosoft = name.includes('microsoft');
+    
+    // Skip generic adapters
+    if (isMicrosoft) continue;
+    
+    // Prefer dedicated NVIDIA/AMD GPUs
+    if (isNvidia || isAmd) {
+      if (!bestGpu) {
+        bestGpu = gpu;
+      } else {
+        // Prefer higher VRAM
+        const bestIsIntegrated = bestGpu.name.toLowerCase().includes('intel');
+        if (bestIsIntegrated || gpu.vramBytes > (bestGpu.vramBytes || 0)) {
+          bestGpu = gpu;
+        }
+      }
+    } else if (!bestGpu && !isIntel) {
+      // Unknown GPU but not Intel integrated
+      bestGpu = gpu;
+    }
+  }
+  
+  return bestGpu;
+}
+
+// Helper: Set gpuInfo from best GPU
+function setGpuInfoFromBestGpu(bestGpu, method) {
+  const name = bestGpu.name.toLowerCase();
+  const isNvidia = name.includes('nvidia');
+  const isAmd = name.includes('amd') || name.includes('radeon');
+  const vramBytes = bestGpu.vramBytes || 0;
+  const vramGb = vramBytes / (1024 * 1024 * 1024);
+  
+  // If VRAM is unknown but it's NVIDIA/AMD, still report as capable
+  const hasKnownVram = vramBytes > 0;
+  
+  gpuInfo = {
+    hasGpu: isNvidia || isAmd,
+    gpuVramGb: hasKnownVram ? Math.round(vramGb * 10) / 10 : 0,
+    // Allow image gen if NVIDIA/AMD with 6GB+ OR if VRAM unknown but has NVIDIA/AMD
+    canGenerateImages: (isNvidia || isAmd) && (vramGb >= 6 || !hasKnownVram),
+    gpuName: bestGpu.name,
+    vramUnknown: !hasKnownVram && (isNvidia || isAmd),
+    detectionMethod: method
+  };
+  log('Selected GPU via ' + method + ': ' + JSON.stringify(gpuInfo));
+}
+
 // Detect GPU capabilities
 async function detectGpuInfo() {
   try {
+    const { execSync } = require('child_process');
+    
     // Use platform-specific commands to detect GPU
     if (process.platform === 'win32') {
-      // Windows: Use PowerShell for proper 64-bit VRAM values (WMIC uses 32-bit signed)
-      const { execSync } = require('child_process');
+      // Windows: Try multiple methods in order of reliability
+      
+      // Method 1: nvidia-smi (most reliable for NVIDIA GPUs)
       try {
-        // PowerShell command that returns JSON with proper 64-bit VRAM
+        const nvidiaSmiPath = 'C:\\Windows\\System32\\nvidia-smi.exe';
+        const result = execSync(`"${nvidiaSmiPath}" --query-gpu=name,memory.total --format=csv,noheader,nounits`, { 
+          encoding: 'utf8', 
+          timeout: 10000,
+          windowsHide: true
+        });
+        log('nvidia-smi output: ' + result.trim());
+        
+        const parts = result.trim().split(',').map(s => s.trim());
+        if (parts.length >= 2 && parts[0]) {
+          const vramMb = parseInt(parts[1]) || 0;
+          const vramGb = vramMb / 1024;
+          
+          gpuInfo = {
+            hasGpu: true,
+            gpuVramGb: Math.round(vramGb * 10) / 10,
+            canGenerateImages: vramGb >= 6,
+            gpuName: parts[0],
+            detectionMethod: 'nvidia-smi'
+          };
+          log('GPU detected via nvidia-smi: ' + JSON.stringify(gpuInfo));
+          return; // Found GPU, exit early
+        }
+      } catch (nvidiaSmiErr) {
+        log('nvidia-smi not available: ' + nvidiaSmiErr.message);
+      }
+      
+      // Method 2: PowerShell Get-CimInstance (proper 64-bit values)
+      try {
         const psCommand = `powershell -NoProfile -Command "Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM | ConvertTo-Json -Compress"`;
-        const result = execSync(psCommand, { encoding: 'utf8', timeout: 10000 });
+        const result = execSync(psCommand, { encoding: 'utf8', timeout: 15000, windowsHide: true });
         log('PowerShell GPU raw output: ' + result.trim());
         
-        // Parse JSON result (can be array or single object)
         let rawGpus = [];
         try {
           const parsed = JSON.parse(result.trim());
           rawGpus = Array.isArray(parsed) ? parsed : [parsed];
         } catch (jsonErr) {
-          log('JSON parse error, trying fallback: ' + jsonErr.message);
-          rawGpus = [];
+          log('JSON parse error: ' + jsonErr.message);
         }
         
-        // Convert to our GPU format
         const gpus = rawGpus.filter(g => g && g.Name).map(g => ({
           name: g.Name || '',
           vramBytes: typeof g.AdapterRAM === 'number' ? g.AdapterRAM : 0
         }));
         
-        log('Parsed GPUs: ' + JSON.stringify(gpus));
+        log('Parsed GPUs from PowerShell: ' + JSON.stringify(gpus));
         
-        // Find the best GPU (prefer NVIDIA/AMD with highest VRAM)
-        let bestGpu = null;
+        const bestGpu = findBestGpu(gpus);
+        if (bestGpu) {
+          setGpuInfoFromBestGpu(bestGpu, 'powershell');
+          return;
+        }
+      } catch (psErr) {
+        log('PowerShell GPU detection failed: ' + psErr.message);
+      }
+      
+      // Method 3: WMIC fallback (32-bit values but better than nothing)
+      try {
+        const result = execSync('wmic path win32_videocontroller get name,adapterram /format:csv', { 
+          encoding: 'utf8', 
+          timeout: 10000,
+          windowsHide: true
+        });
+        log('WMIC raw output: ' + result.trim());
         
-        for (const gpu of gpus) {
-          const name = gpu.name.toLowerCase();
-          const isNvidia = name.includes('nvidia');
-          const isAmd = name.includes('amd') || name.includes('radeon');
-          const isIntel = name.includes('intel');
-          const isMicrosoft = name.includes('microsoft');
-          
-          // Skip generic adapters
-          if (isMicrosoft) continue;
-          
-          // Prefer dedicated NVIDIA/AMD GPUs
-          if (isNvidia || isAmd) {
-            if (!bestGpu) {
-              bestGpu = gpu;
-            } else {
-              // Prefer higher VRAM
-              const bestIsIntegrated = bestGpu.name.toLowerCase().includes('intel');
-              if (bestIsIntegrated || gpu.vramBytes > (bestGpu.vramBytes || 0)) {
-                bestGpu = gpu;
-              }
+        const lines = result.trim().split(/\r?\n/).filter(l => l.trim() && !l.startsWith('Node'));
+        const gpus = [];
+        
+        for (const line of lines) {
+          const parts = line.split(',');
+          if (parts.length >= 3) {
+            const vram = parseInt(parts[1]) || 0;
+            const name = parts[2] || '';
+            if (name) {
+              gpus.push({ name, vramBytes: vram > 0 ? vram : 0 });
             }
-          } else if (!bestGpu && !isIntel) {
-            // Unknown GPU but not Intel integrated
-            bestGpu = gpu;
           }
         }
         
+        log('Parsed GPUs from WMIC: ' + JSON.stringify(gpus));
+        
+        const bestGpu = findBestGpu(gpus);
         if (bestGpu) {
-          const name = bestGpu.name.toLowerCase();
-          const isNvidia = name.includes('nvidia');
-          const isAmd = name.includes('amd') || name.includes('radeon');
-          const vramBytes = bestGpu.vramBytes || 0;
-          const vramGb = vramBytes / (1024 * 1024 * 1024);
-          
-          // If VRAM is unknown but it's NVIDIA/AMD, still report as capable
-          const hasKnownVram = vramBytes > 0;
-          
-          gpuInfo = {
-            hasGpu: isNvidia || isAmd,
-            gpuVramGb: hasKnownVram ? Math.round(vramGb * 10) / 10 : 0,
-            // Allow image gen if NVIDIA/AMD with 6GB+ OR if VRAM unknown but has NVIDIA/AMD
-            canGenerateImages: (isNvidia || isAmd) && (vramGb >= 6 || !hasKnownVram),
-            gpuName: bestGpu.name,
-            vramUnknown: !hasKnownVram && (isNvidia || isAmd)
-          };
-          log('Selected GPU: ' + JSON.stringify(gpuInfo));
-        } else {
-          log('No suitable GPU found in PowerShell output');
+          setGpuInfoFromBestGpu(bestGpu, 'wmic');
+          return;
         }
-      } catch (e) {
-        log('GPU detection failed on Windows: ' + e.message);
+      } catch (wmicErr) {
+        log('WMIC GPU detection failed: ' + wmicErr.message);
       }
+      
+      log('All Windows GPU detection methods failed');
+      
     } else if (process.platform === 'linux') {
       // Linux: Try nvidia-smi or lspci
-      const { execSync } = require('child_process');
       try {
         // Try nvidia-smi first (most reliable for NVIDIA)
         const result = execSync('nvidia-smi --query-gpu=name,memory.total --format=csv,noheader', { encoding: 'utf8' });
