@@ -173,9 +173,29 @@ let isOnline = false;
 let manualStop = false; // Track if worker was manually stopped (vs crashed)
 let lastWorkerActivity = Date.now();
 let watchdogInterval = null;
-let gpuInfo = { hasGpu: false, gpuVramGb: 0, canGenerateImages: false };
+let deviceId = null; // Unique device identifier for per-device tracking
 const WATCHDOG_TIMEOUT_MS = 60000; // 60 seconds without activity = unresponsive
 const WATCHDOG_CHECK_INTERVAL_MS = 15000; // Check every 15 seconds
+
+// Generate or load device ID for per-device tracking
+function getOrCreateDeviceId() {
+  const configPath = path.join(app.getPath('userData'), 'device-id');
+  try {
+    if (fs.existsSync(configPath)) {
+      return fs.readFileSync(configPath, 'utf8').trim();
+    }
+    // Generate new device ID using machine info
+    const crypto = require('crypto');
+    const os = require('os');
+    const machineId = `${os.hostname()}-${os.platform()}-${os.arch()}-${os.cpus()[0]?.model || 'unknown'}`;
+    const id = crypto.createHash('sha256').update(machineId + Date.now()).digest('hex').substring(0, 32);
+    fs.writeFileSync(configPath, id);
+    return id;
+  } catch (err) {
+    log('Error with device ID: ' + err.message);
+    return 'unknown-' + Date.now();
+  }
+}
 
 // Logging functions
 function log(message) {
@@ -655,10 +675,12 @@ function sendStatusToRenderer() {
       setupPhase,
       setupProgress,
       lastError,
-      gpuInfo,
-      gpuOverrideEnabled: config.gpuOverrideEnabled || false,
+      // Image AI status
       imageAiEnabled: config.imageAiEnabled || false,
-      imageAiInstalled
+      imageAiInstalled,
+      imageBenchmarkTimeMs: config.imageBenchmarkTimeMs || null,
+      imageQualityTier: config.imageQualityTier || 'none',
+      deviceId: deviceId
     });
   }
 }
@@ -1733,28 +1755,60 @@ const SD_MODEL_SIZE_BYTES = 4265380512; // ~4GB
 
 let imageAiDownloadController = null;
 
-ipcMain.handle('set-gpu-override', async (event, enabled) => {
-  config.gpuOverrideEnabled = enabled;
-  // If enabling override, update gpuInfo to reflect this
-  if (enabled) {
-    gpuInfo = gpuInfo || {};
-    gpuInfo.hasGpu = true;
-    gpuInfo.canGenerateImages = true;
-    gpuInfo.gpuVramGb = gpuInfo.gpuVramGb || 8; // Assume 8GB if unknown
-    gpuInfo.gpuName = gpuInfo.gpuName || 'Manual Override';
-    gpuInfo.detectionMethod = 'override';
-  }
-  saveConfig();
-  sendStatusToRenderer();
-  log('GPU override set to: ' + enabled);
-  return true;
-});
-
 ipcMain.handle('set-image-ai-enabled', async (event, enabled) => {
   config.imageAiEnabled = enabled;
   saveConfig();
   sendStatusToRenderer();
+  log('Image AI enabled: ' + enabled);
   return true;
+});
+
+// Store benchmark result and report to server
+ipcMain.handle('report-benchmark', async (event, benchmarkTimeMs) => {
+  config.imageBenchmarkTimeMs = benchmarkTimeMs;
+  
+  // Determine quality tier based on benchmark time
+  // Benchmark is for 256px image generation
+  if (benchmarkTimeMs < 15000) {
+    config.imageQualityTier = 'fast'; // All quality levels
+  } else if (benchmarkTimeMs < 30000) {
+    config.imageQualityTier = 'medium'; // Up to 512px
+  } else if (benchmarkTimeMs < 60000) {
+    config.imageQualityTier = 'slow'; // 256px only
+  } else {
+    config.imageQualityTier = 'banned'; // Too slow
+  }
+  
+  saveConfig();
+  sendStatusToRenderer();
+  log(`Benchmark completed: ${benchmarkTimeMs}ms, tier: ${config.imageQualityTier}`);
+  
+  // Report to server
+  if (config.apiKey) {
+    try {
+      const response = await fetch(`${SERVER_URL}/api/worker/report-benchmark`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${config.apiKey}`
+        },
+        body: JSON.stringify({
+          deviceId: deviceId,
+          benchmarkTimeMs: benchmarkTimeMs,
+          qualityTier: config.imageQualityTier
+        })
+      });
+      if (response.ok) {
+        log('Benchmark reported to server successfully');
+      } else {
+        log('Failed to report benchmark to server: ' + response.status);
+      }
+    } catch (err) {
+      log('Error reporting benchmark to server: ' + err.message);
+    }
+  }
+  
+  return { tier: config.imageQualityTier };
 });
 
 ipcMain.handle('download-image-ai', async () => {
@@ -2057,18 +2111,10 @@ function setupAutoUpdater() {
 app.whenReady().then(async () => {
   log('App starting...');
   loadConfig();
-  await detectGpuInfo();
   
-  // Apply GPU override from saved config if enabled
-  if (config.gpuOverrideEnabled) {
-    gpuInfo = gpuInfo || {};
-    gpuInfo.hasGpu = true;
-    gpuInfo.canGenerateImages = true;
-    gpuInfo.gpuVramGb = gpuInfo.gpuVramGb || 8;
-    gpuInfo.gpuName = gpuInfo.gpuName || 'Manual Override';
-    gpuInfo.detectionMethod = 'override';
-    log('GPU override applied from config');
-  }
+  // Initialize device ID for per-device tracking
+  deviceId = getOrCreateDeviceId();
+  log('Device ID: ' + deviceId);
   
   createWindow();
   createTray();

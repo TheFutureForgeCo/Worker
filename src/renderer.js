@@ -57,9 +57,6 @@ const uninstallBtn = document.getElementById('uninstallBtn');
 const backBtn = document.getElementById('backBtn');
 
 // DOM Elements - Image AI Section
-const gpuOverrideToggle = document.getElementById('gpuOverrideToggle');
-const gpuOverrideSwitch = document.getElementById('gpuOverrideSwitch');
-const gpuOverrideStatus = document.getElementById('gpuOverrideStatus');
 const imageAiToggle = document.getElementById('imageAiToggle');
 const imageAiSwitch = document.getElementById('imageAiSwitch');
 const imageAiStatus = document.getElementById('imageAiStatus');
@@ -69,6 +66,13 @@ const imageAiProgress = document.getElementById('imageAiProgress');
 const imageAiProgressFill = document.getElementById('imageAiProgressFill');
 const imageAiProgressText = document.getElementById('imageAiProgressText');
 const uninstallImageAiBtn = document.getElementById('uninstallImageAiBtn');
+const imageBenchmarkStatus = document.getElementById('imageBenchmarkStatus');
+const benchmarkResult = document.getElementById('benchmarkResult');
+
+// DOM Elements - Image AI Warning Modal
+const imageAiWarningModal = document.getElementById('imageAiWarningModal');
+const imageAiWarningCancel = document.getElementById('imageAiWarningCancel');
+const imageAiWarningConfirm = document.getElementById('imageAiWarningConfirm');
 
 // DOM Elements - About Page
 const aboutBackBtn = document.getElementById('aboutBackBtn');
@@ -472,64 +476,71 @@ if (openLogsFolderBtn) {
 
 let imageAiEnabled = false;
 let imageAiInstalled = false;
-let canGenerateImages = false;
-let gpuOverrideEnabled = false;
+let imageBenchmarkTimeMs = null;
+let imageQualityTier = 'none';
 
 // Update Image AI UI based on status
 function updateImageAiUI(status) {
-  const gpuInfo = status.gpuInfo || {};
-  gpuOverrideEnabled = status.gpuOverrideEnabled || false;
-  
-  // If GPU override is enabled, treat as capable
-  canGenerateImages = gpuOverrideEnabled || gpuInfo.canGenerateImages || false;
   imageAiInstalled = status.imageAiInstalled || false;
   imageAiEnabled = status.imageAiEnabled || false;
-  
-  // Update GPU override toggle
-  if (gpuOverrideSwitch) {
-    gpuOverrideSwitch.classList.toggle('active', gpuOverrideEnabled);
-  }
-  if (gpuOverrideStatus) {
-    if (gpuOverrideEnabled) {
-      gpuOverrideStatus.textContent = 'GPU manually enabled';
-    } else if (gpuInfo.hasGpu && gpuInfo.gpuVramGb >= 6) {
-      gpuOverrideStatus.textContent = `Auto-detected: ${gpuInfo.gpuName || 'GPU'} (${gpuInfo.gpuVramGb}GB)`;
-    } else if (gpuInfo.hasGpu) {
-      gpuOverrideStatus.textContent = `Auto-detected: ${gpuInfo.gpuVramGb || 0}GB (enable to override)`;
-    } else {
-      gpuOverrideStatus.textContent = 'Enable if you have a 6GB+ GPU';
-    }
-  }
+  imageBenchmarkTimeMs = status.imageBenchmarkTimeMs || null;
+  imageQualityTier = status.imageQualityTier || 'none';
   
   // Update status text
   if (imageAiStatus) {
-    if (gpuOverrideEnabled) {
-      imageAiStatus.textContent = imageAiEnabled ? 'Enabled (GPU override)' : 'Disabled';
-    } else if (!gpuInfo.hasGpu) {
-      imageAiStatus.textContent = 'No compatible GPU detected';
-    } else if (gpuInfo.gpuVramGb < 6) {
-      imageAiStatus.textContent = `GPU has ${gpuInfo.gpuVramGb}GB VRAM (need 6GB+)`;
+    if (imageAiEnabled && imageAiInstalled) {
+      if (imageQualityTier === 'none' || !imageBenchmarkTimeMs) {
+        imageAiStatus.textContent = 'Enabled - benchmark pending';
+      } else {
+        imageAiStatus.textContent = `Enabled - ${imageQualityTier} tier`;
+      }
+    } else if (imageAiEnabled && !imageAiInstalled) {
+      imageAiStatus.textContent = 'Download model to continue';
     } else {
-      imageAiStatus.textContent = imageAiEnabled ? 'Enabled' : 'Disabled';
+      imageAiStatus.textContent = 'Accept image generation tasks from the network';
     }
   }
   
   // Update toggle switch
   if (imageAiSwitch) {
     imageAiSwitch.classList.toggle('active', imageAiEnabled);
-    // Enable toggle if GPU capable OR override enabled
-    imageAiToggle.style.opacity = canGenerateImages ? '1' : '0.5';
-    imageAiToggle.style.pointerEvents = canGenerateImages ? 'auto' : 'none';
   }
   
   // Show/hide download button
   if (downloadImageAiBtn) {
-    downloadImageAiBtn.style.display = (canGenerateImages && !imageAiInstalled && imageAiEnabled) ? 'flex' : 'none';
+    downloadImageAiBtn.style.display = (imageAiEnabled && !imageAiInstalled) ? 'flex' : 'none';
   }
   
   // Show/hide uninstall button
   if (uninstallImageAiBtn) {
     uninstallImageAiBtn.style.display = imageAiInstalled ? 'flex' : 'none';
+  }
+  
+  // Show/hide benchmark status
+  if (imageBenchmarkStatus) {
+    imageBenchmarkStatus.style.display = imageAiInstalled ? 'flex' : 'none';
+  }
+  
+  // Update benchmark result
+  if (benchmarkResult && imageAiInstalled) {
+    if (imageBenchmarkTimeMs) {
+      const seconds = (imageBenchmarkTimeMs / 1000).toFixed(1);
+      let tierText = '';
+      if (imageQualityTier === 'fast') {
+        tierText = 'Fast - All quality levels';
+      } else if (imageQualityTier === 'medium') {
+        tierText = 'Medium - Up to 512px';
+      } else if (imageQualityTier === 'slow') {
+        tierText = 'Slow - 256px only';
+      } else if (imageQualityTier === 'banned') {
+        tierText = 'Too slow - Image generation disabled';
+      } else {
+        tierText = 'Pending tier assignment';
+      }
+      benchmarkResult.textContent = `${seconds}s - ${tierText}`;
+    } else {
+      benchmarkResult.textContent = 'Benchmark will run after first image task';
+    }
   }
   
   // Update download status
@@ -538,13 +549,37 @@ function updateImageAiUI(status) {
   }
 }
 
-// Toggle GPU Override
-if (gpuOverrideToggle) {
-  gpuOverrideToggle.addEventListener('click', async () => {
-    gpuOverrideEnabled = !gpuOverrideEnabled;
-    gpuOverrideSwitch.classList.toggle('active', gpuOverrideEnabled);
+// Show warning modal when enabling image AI
+function showImageAiWarningModal() {
+  if (imageAiWarningModal) {
+    imageAiWarningModal.classList.add('active');
+  }
+}
+
+function hideImageAiWarningModal() {
+  if (imageAiWarningModal) {
+    imageAiWarningModal.classList.remove('active');
+  }
+}
+
+// Modal button handlers
+if (imageAiWarningCancel) {
+  imageAiWarningCancel.addEventListener('click', () => {
+    hideImageAiWarningModal();
+  });
+}
+
+if (imageAiWarningConfirm) {
+  imageAiWarningConfirm.addEventListener('click', async () => {
+    hideImageAiWarningModal();
     
-    await window.electronAPI.setGpuOverride(gpuOverrideEnabled);
+    // Enable image AI
+    imageAiEnabled = true;
+    if (imageAiSwitch) {
+      imageAiSwitch.classList.toggle('active', true);
+    }
+    
+    await window.electronAPI.setImageAiEnabled(true);
     
     // Re-fetch status to update UI
     const status = await window.electronAPI.getStatus();
@@ -552,19 +587,22 @@ if (gpuOverrideToggle) {
   });
 }
 
-// Toggle Image AI
+// Toggle Image AI - shows warning modal when enabling
 if (imageAiToggle) {
   imageAiToggle.addEventListener('click', async () => {
-    if (!canGenerateImages) return;
-    
-    imageAiEnabled = !imageAiEnabled;
-    imageAiSwitch.classList.toggle('active', imageAiEnabled);
-    
-    await window.electronAPI.setImageAiEnabled(imageAiEnabled);
-    
-    // Show download button if enabled but not installed
-    if (downloadImageAiBtn) {
-      downloadImageAiBtn.style.display = (imageAiEnabled && !imageAiInstalled) ? 'flex' : 'none';
+    if (imageAiEnabled) {
+      // Disabling - no warning needed
+      imageAiEnabled = false;
+      if (imageAiSwitch) {
+        imageAiSwitch.classList.toggle('active', false);
+      }
+      await window.electronAPI.setImageAiEnabled(false);
+      
+      const status = await window.electronAPI.getStatus();
+      updateImageAiUI(status);
+    } else {
+      // Enabling - show warning modal
+      showImageAiWarningModal();
     }
   });
 }

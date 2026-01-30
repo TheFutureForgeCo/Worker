@@ -39,11 +39,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   
   // Image AI management
-  setGpuOverride: (enabled) => ipcRenderer.invoke('set-gpu-override', enabled),
   setImageAiEnabled: (enabled) => ipcRenderer.invoke('set-image-ai-enabled', enabled),
   downloadImageAi: () => ipcRenderer.invoke('download-image-ai'),
   cancelImageAiDownload: () => ipcRenderer.invoke('cancel-image-ai-download'),
   uninstallImageAi: () => ipcRenderer.invoke('uninstall-image-ai'),
+  reportBenchmark: (benchmarkTimeMs) => ipcRenderer.invoke('report-benchmark', benchmarkTimeMs),
   
   // Event listeners
   onStatusUpdate: (callback) => {
