@@ -1040,12 +1040,27 @@ async function startWorker() {
     
     const workerScript = getWorkerScriptPath();
     log(`Worker script path: ${workerScript}`);
+    log(`Worker script exists: ${fs.existsSync(workerScript)}`);
     const appSignature = generateAppSignature();
     
     // Log directory for worker debug logs
     const logDir = path.join(app.getPath('userData'), 'logs');
+    log(`Log directory: ${logDir}`);
     if (!fs.existsSync(logDir)) {
       fs.mkdirSync(logDir, { recursive: true });
+      log('Created log directory');
+    }
+    
+    // Write a main process log file for debugging
+    const mainLogFile = path.join(logDir, 'main-process.log');
+    try {
+      fs.appendFileSync(mainLogFile, `\n[${new Date().toISOString()}] Starting worker process...\n`);
+      fs.appendFileSync(mainLogFile, `Worker script: ${workerScript}\n`);
+      fs.appendFileSync(mainLogFile, `Script exists: ${fs.existsSync(workerScript)}\n`);
+      fs.appendFileSync(mainLogFile, `API key set: ${config.apiKey ? 'yes' : 'no'}\n`);
+      fs.appendFileSync(mainLogFile, `Server URL: ${SERVER_URL}\n`);
+    } catch (e) {
+      log('Failed to write main log file: ' + e.message);
     }
     
     workerProcess = spawn(process.execPath, [workerScript], {
@@ -1061,6 +1076,11 @@ async function startWorker() {
     });
     
     log(`Worker process started (PID: ${workerProcess.pid})`);
+    
+    // Log spawn result
+    try {
+      fs.appendFileSync(mainLogFile, `Worker PID: ${workerProcess.pid}\n`);
+    } catch (e) {}
     isWorkerRunning = true;
 
     workerProcess.stdout.on('data', (data) => {
@@ -1094,6 +1114,14 @@ async function startWorker() {
 
     workerProcess.on('close', (code) => {
       log(`Worker process exited with code ${code}`);
+      
+      // Log to file for debugging
+      try {
+        const logDir = path.join(app.getPath('userData'), 'logs');
+        const mainLogFile = path.join(logDir, 'main-process.log');
+        fs.appendFileSync(mainLogFile, `[${new Date().toISOString()}] Worker exited with code: ${code}\n`);
+      } catch (e) {}
+      
       isWorkerRunning = false;
       isOnline = false;
       stats.status = code === 0 ? 'Stopped' : 'Crashed';
