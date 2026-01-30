@@ -8,16 +8,48 @@ const http = require('http');
 const os = require('os');
 const { autoUpdater } = require('electron-updater');
 
+// ============== EARLY DEBUG LOGGING ==============
+// This runs immediately when the app starts, before anything else
+const EARLY_LOG_PATH = path.join(app.getPath('userData'), 'startup-debug.log');
+function earlyLog(msg) {
+  try {
+    const line = `[${new Date().toISOString()}] ${msg}\n`;
+    fs.appendFileSync(EARLY_LOG_PATH, line);
+  } catch (e) {
+    // Can't log the error, just continue
+  }
+}
+
+// Clear old log and start fresh
+try {
+  fs.writeFileSync(EARLY_LOG_PATH, `=== ComputeGrid Worker Startup Log ===\n`);
+  earlyLog(`App starting...`);
+  earlyLog(`Platform: ${process.platform}, Arch: ${process.arch}`);
+  earlyLog(`Electron version: ${process.versions.electron}`);
+  earlyLog(`Node version: ${process.versions.node}`);
+  earlyLog(`User data path: ${app.getPath('userData')}`);
+  earlyLog(`Is packaged: ${app.isPackaged}`);
+  if (app.isPackaged) {
+    earlyLog(`Resources path: ${process.resourcesPath}`);
+  }
+} catch (e) {
+  // Continue even if logging fails
+}
+// ============== END EARLY DEBUG LOGGING ==============
+
 // Single instance lock - prevent multiple windows
 const gotTheLock = app.requestSingleInstanceLock();
+earlyLog(`Single instance lock: ${gotTheLock ? 'acquired' : 'failed (another instance running)'}`);
 
 if (!gotTheLock) {
   // Another instance is already running - exit immediately
+  earlyLog('Exiting - another instance is running');
   app.exit(0);
 }
 
 // App version and integrity
 const APP_VERSION = require('../package.json').version;
+earlyLog(`App version: ${APP_VERSION}`);
 const INTEGRITY_CHECK_INTERVAL = 5 * 60 * 1000;
 
 // Hardcoded server URL - users only need to enter API key
@@ -916,7 +948,10 @@ async function validateApiKey(apiKey) {
 
 // Start the worker
 async function startWorker() {
+  earlyLog('startWorker() called');
+  
   if (isWorkerRunning) {
+    earlyLog('Worker already running, returning');
     log('Worker already running');
     return;
   }
@@ -925,12 +960,14 @@ async function startWorker() {
   lastError = null;
   
   if (!config.apiKey) {
+    earlyLog('No API key configured');
     logError('API key required');
     stats.status = 'API key required';
     sendStatusToRenderer();
     return;
   }
 
+  earlyLog(`API key present: ${config.apiKey.slice(0, 8)}...`);
   log('Starting worker...');
   stats.status = 'Starting...';
   sendStatusToRenderer();
@@ -1036,9 +1073,12 @@ async function startWorker() {
     isOnline = true;
     
     // Start the worker process with integrity info
+    earlyLog('About to start worker process');
     log('Starting worker process...');
     
     const workerScript = getWorkerScriptPath();
+    earlyLog(`Worker script path: ${workerScript}`);
+    earlyLog(`Worker script exists: ${fs.existsSync(workerScript)}`);
     log(`Worker script path: ${workerScript}`);
     log(`Worker script exists: ${fs.existsSync(workerScript)}`);
     const appSignature = generateAppSignature();
@@ -1063,6 +1103,7 @@ async function startWorker() {
       log('Failed to write main log file: ' + e.message);
     }
     
+    earlyLog(`Spawning worker with: ${process.execPath} ${workerScript}`);
     workerProcess = spawn(process.execPath, [workerScript], {
       env: {
         ...process.env,
@@ -1075,6 +1116,7 @@ async function startWorker() {
       stdio: ['pipe', 'pipe', 'pipe', 'ipc']
     });
     
+    earlyLog(`Worker process started (PID: ${workerProcess.pid})`);
     log(`Worker process started (PID: ${workerProcess.pid})`);
     
     // Log spawn result
@@ -1113,6 +1155,7 @@ async function startWorker() {
     });
 
     workerProcess.on('close', (code) => {
+      earlyLog(`Worker process exited with code ${code}`);
       log(`Worker process exited with code ${code}`);
       
       // Log to file for debugging
@@ -1144,6 +1187,7 @@ async function startWorker() {
     });
 
     workerProcess.on('error', (err) => {
+      earlyLog(`Worker process error: ${err.message}`);
       logError('Worker process error', err);
       isWorkerRunning = false;
       isOnline = false;
@@ -1358,8 +1402,15 @@ ipcMain.handle('save-config', async (event, newConfig) => {
 });
 
 ipcMain.handle('start-worker', async () => {
-  await startWorker();
-  return true;
+  earlyLog('IPC: start-worker called');
+  try {
+    await startWorker();
+    earlyLog('IPC: start-worker completed successfully');
+    return true;
+  } catch (err) {
+    earlyLog(`IPC: start-worker failed: ${err.message}`);
+    throw err;
+  }
 });
 
 ipcMain.handle('stop-worker', async () => {
