@@ -1402,6 +1402,7 @@ async function startWorker() {
         CG_APP_VERSION: APP_VERSION,
         CG_APP_SIGNATURE: appSignature,
         CG_LOG_DIR: logDir,
+        CG_USER_DATA: app.getPath('userData'),  // Pass userData path for image AI
         ELECTRON_RUN_AS_NODE: '1'  // Critical: tells Electron to run as Node.js
       },
       stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
@@ -1750,10 +1751,41 @@ ipcMain.handle('open-external', (event, url) => {
 // Image AI management
 const IMAGE_AI_DIR = path.join(app.getPath('userData'), 'image-ai');
 const SD_MODEL_PATH = path.join(IMAGE_AI_DIR, 'sd-v1-5.safetensors');
-const SD_MODEL_URL = 'https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors';
+const PYTHON_DIR = path.join(IMAGE_AI_DIR, 'python');
+const PYTHON_EXE = process.platform === 'win32' 
+  ? path.join(PYTHON_DIR, 'python', 'python.exe')
+  : path.join(PYTHON_DIR, 'bin', 'python3');
+
+// Use a CDN mirror that doesn't require auth - civitai hosts many models
+const SD_MODEL_URL = 'https://civitai.com/api/download/models/11745'; // SD 1.5 base model
 const SD_MODEL_SIZE_BYTES = 4265380512; // ~4GB
+const SD_MODEL_MIN_SIZE = 4000000000; // Minimum valid size (4GB)
+
+// Portable Python URLs for each platform
+const PYTHON_URLS = {
+  win32: 'https://github.com/indygreg/python-build-standalone/releases/download/20240107/cpython-3.11.7+20240107-x86_64-pc-windows-msvc-shared-install_only.tar.gz',
+  linux: 'https://github.com/indygreg/python-build-standalone/releases/download/20240107/cpython-3.11.7+20240107-x86_64-unknown-linux-gnu-install_only.tar.gz',
+  darwin: 'https://github.com/indygreg/python-build-standalone/releases/download/20240107/cpython-3.11.7+20240107-x86_64-apple-darwin-install_only.tar.gz'
+};
 
 let imageAiDownloadController = null;
+let currentDownloadPhase = 'idle'; // 'idle', 'python', 'deps', 'model', 'benchmark'
+
+// Check if Python environment is ready
+function isPythonReady() {
+  return fs.existsSync(PYTHON_EXE);
+}
+
+// Check if SD model is ready
+function isModelReady() {
+  if (!fs.existsSync(SD_MODEL_PATH)) return false;
+  try {
+    const stats = fs.statSync(SD_MODEL_PATH);
+    return stats.size >= SD_MODEL_MIN_SIZE;
+  } catch {
+    return false;
+  }
+}
 
 ipcMain.handle('set-image-ai-enabled', async (event, enabled) => {
   config.imageAiEnabled = enabled;
@@ -1764,7 +1796,7 @@ ipcMain.handle('set-image-ai-enabled', async (event, enabled) => {
 });
 
 // Store benchmark result and report to server
-ipcMain.handle('report-benchmark', async (event, benchmarkTimeMs) => {
+async function reportBenchmarkResult(benchmarkTimeMs) {
   config.imageBenchmarkTimeMs = benchmarkTimeMs;
   
   // Determine quality tier based on benchmark time
@@ -1809,116 +1841,554 @@ ipcMain.handle('report-benchmark', async (event, benchmarkTimeMs) => {
   }
   
   return { tier: config.imageQualityTier };
+}
+
+ipcMain.handle('report-benchmark', async (event, benchmarkTimeMs) => {
+  return await reportBenchmarkResult(benchmarkTimeMs);
+});
+
+// Download file with progress, proper redirects, and status checking
+function downloadFile(url, destPath, onProgress) {
+  return new Promise((resolve, reject) => {
+    const tempPath = destPath + '.tmp';
+    log(`[Download] Starting: ${url}`);
+    log(`[Download] Destination: ${destPath}`);
+    
+    function doDownload(downloadUrl, redirectCount = 0) {
+      if (redirectCount > 5) {
+        reject(new Error('Too many redirects'));
+        return;
+      }
+      
+      const protocol = downloadUrl.startsWith('https') ? https : http;
+      
+      const request = protocol.get(downloadUrl, {
+        headers: { 
+          'User-Agent': 'ComputeGrid-Worker/1.5.0',
+          'Accept': '*/*'
+        },
+        timeout: 30000
+      }, (response) => {
+        log(`[Download] Response status: ${response.statusCode}`);
+        log(`[Download] Content-Length: ${response.headers['content-length']}`);
+        
+        // Handle redirects
+        if (response.statusCode === 301 || response.statusCode === 302 || response.statusCode === 307 || response.statusCode === 308) {
+          const redirectUrl = response.headers.location;
+          log(`[Download] Redirecting to: ${redirectUrl}`);
+          response.resume(); // Consume response to free up memory
+          doDownload(redirectUrl, redirectCount + 1);
+          return;
+        }
+        
+        // Check for error status codes
+        if (response.statusCode !== 200) {
+          response.resume();
+          reject(new Error(`HTTP ${response.statusCode}: ${response.statusMessage}`));
+          return;
+        }
+        
+        const totalBytes = parseInt(response.headers['content-length'], 10) || 0;
+        let downloadedBytes = 0;
+        let lastProgressUpdate = -1;
+        
+        const file = fs.createWriteStream(tempPath);
+        
+        response.pipe(file);
+        
+        response.on('data', (chunk) => {
+          downloadedBytes += chunk.length;
+          if (totalBytes > 0) {
+            const progress = Math.floor((downloadedBytes / totalBytes) * 100);
+            if (progress > lastProgressUpdate) {
+              lastProgressUpdate = progress;
+              if (onProgress) onProgress(progress, downloadedBytes, totalBytes);
+            }
+          }
+        });
+        
+        response.on('error', (err) => {
+          log(`[Download] Response error: ${err.message}`);
+          file.close();
+          if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+          reject(err);
+        });
+        
+        file.on('finish', () => {
+          file.close(() => {
+            // Verify file was written
+            try {
+              const stats = fs.statSync(tempPath);
+              log(`[Download] File size: ${stats.size} bytes`);
+              
+              if (stats.size === 0) {
+                fs.unlinkSync(tempPath);
+                reject(new Error('Downloaded file is empty'));
+                return;
+              }
+              
+              // Move temp to final
+              if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+              fs.renameSync(tempPath, destPath);
+              log(`[Download] Complete: ${destPath}`);
+              resolve(destPath);
+            } catch (err) {
+              reject(err);
+            }
+          });
+        });
+        
+        file.on('error', (err) => {
+          log(`[Download] File error: ${err.message}`);
+          if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+          reject(err);
+        });
+      });
+      
+      request.on('error', (err) => {
+        log(`[Download] Request error: ${err.message}`);
+        reject(err);
+      });
+      
+      request.on('timeout', () => {
+        log(`[Download] Request timeout`);
+        request.destroy();
+        reject(new Error('Download timed out'));
+      });
+      
+      imageAiDownloadController = request;
+    }
+    
+    doDownload(url);
+  });
+}
+
+// Extract tar.gz file
+async function extractTarGz(archivePath, destDir) {
+  log(`[Extract] Extracting ${archivePath} to ${destDir}`);
+  
+  return new Promise((resolve, reject) => {
+    // Use tar command on Unix, or built-in on Windows
+    const isWindows = process.platform === 'win32';
+    
+    if (!fs.existsSync(destDir)) {
+      fs.mkdirSync(destDir, { recursive: true });
+    }
+    
+    if (isWindows) {
+      // Use PowerShell to extract
+      const cmd = `powershell -Command "tar -xzf '${archivePath}' -C '${destDir}'"`;
+      exec(cmd, (err, stdout, stderr) => {
+        if (err) {
+          log(`[Extract] Error: ${stderr}`);
+          reject(err);
+        } else {
+          log(`[Extract] Complete`);
+          resolve();
+        }
+      });
+    } else {
+      // Use tar command
+      const cmd = `tar -xzf "${archivePath}" -C "${destDir}"`;
+      exec(cmd, (err, stdout, stderr) => {
+        if (err) {
+          log(`[Extract] Error: ${stderr}`);
+          reject(err);
+        } else {
+          log(`[Extract] Complete`);
+          resolve();
+        }
+      });
+    }
+  });
+}
+
+// Install Python dependencies (diffusers, torch, etc.)
+async function installPythonDeps() {
+  log('[Deps] Installing Python dependencies...');
+  
+  return new Promise((resolve, reject) => {
+    const pipPath = process.platform === 'win32'
+      ? path.join(PYTHON_DIR, 'python', 'Scripts', 'pip.exe')
+      : path.join(PYTHON_DIR, 'bin', 'pip3');
+    
+    // Check if pip exists
+    if (!fs.existsSync(pipPath)) {
+      log(`[Deps] pip not found at ${pipPath}`);
+      reject(new Error('pip not found'));
+      return;
+    }
+    
+    // Install core dependencies
+    const packages = [
+      'torch',
+      'torchvision', 
+      'diffusers',
+      'transformers',
+      'accelerate',
+      'safetensors',
+      'xformers'
+    ];
+    
+    log(`[Deps] Installing: ${packages.join(', ')}`);
+    
+    const proc = spawn(pipPath, ['install', '--no-cache-dir', ...packages], {
+      env: { ...process.env, PIP_DISABLE_PIP_VERSION_CHECK: '1' }
+    });
+    
+    let output = '';
+    
+    proc.stdout.on('data', (data) => {
+      output += data.toString();
+      // Log progress
+      const lines = data.toString().split('\n');
+      for (const line of lines) {
+        if (line.includes('Collecting') || line.includes('Installing') || line.includes('Successfully')) {
+          log(`[Deps] ${line.trim()}`);
+          if (mainWindow) {
+            mainWindow.webContents.send('image-ai-deps-progress', line.trim());
+          }
+        }
+      }
+    });
+    
+    proc.stderr.on('data', (data) => {
+      output += data.toString();
+    });
+    
+    proc.on('close', (code) => {
+      if (code === 0) {
+        log('[Deps] Installation complete');
+        resolve();
+      } else {
+        log(`[Deps] Installation failed with code ${code}`);
+        log(`[Deps] Output: ${output.slice(-1000)}`);
+        reject(new Error(`pip install failed with code ${code}`));
+      }
+    });
+    
+    proc.on('error', (err) => {
+      log(`[Deps] Process error: ${err.message}`);
+      reject(err);
+    });
+  });
+}
+
+// Run benchmark image generation
+async function runBenchmark() {
+  log('[Benchmark] Starting benchmark...');
+  
+  if (mainWindow) {
+    mainWindow.webContents.send('image-ai-benchmark-start');
+  }
+  
+  const benchmarkPrompt = 'a simple red cube on a white background, minimal, clean';
+  const benchmarkSeed = 42;
+  const benchmarkWidth = 256;
+  const benchmarkHeight = 256;
+  
+  const startTime = Date.now();
+  
+  try {
+    const result = await generateImage({
+      prompt: benchmarkPrompt,
+      seed: benchmarkSeed,
+      width: benchmarkWidth,
+      height: benchmarkHeight,
+      is_benchmark: true
+    });
+    
+    const totalTime = Date.now() - startTime;
+    
+    if (result.success) {
+      log(`[Benchmark] Success! Time: ${totalTime}ms`);
+      
+      // Save benchmark image for verification
+      const benchmarkImagePath = path.join(IMAGE_AI_DIR, 'benchmark-result.png');
+      const imageBuffer = Buffer.from(result.image_base64, 'base64');
+      fs.writeFileSync(benchmarkImagePath, imageBuffer);
+      log(`[Benchmark] Image saved to: ${benchmarkImagePath}`);
+      
+      await reportBenchmarkResult(totalTime);
+      
+      if (mainWindow) {
+        mainWindow.webContents.send('image-ai-benchmark-complete', {
+          time: totalTime,
+          tier: config.imageQualityTier
+        });
+      }
+      
+      return { success: true, time: totalTime, tier: config.imageQualityTier };
+    } else {
+      throw new Error(result.error || 'Unknown error');
+    }
+  } catch (err) {
+    log(`[Benchmark] Failed: ${err.message}`);
+    
+    if (mainWindow) {
+      mainWindow.webContents.send('image-ai-benchmark-error', err.message);
+    }
+    
+    return { success: false, error: err.message };
+  }
+}
+
+// Generate image using SD
+async function generateImage(params) {
+  const { prompt, seed, width, height, is_benchmark, tileX, tileY, totalTilesX, totalTilesY, tileOverlap } = params;
+  
+  log(`[Generate] Starting: ${width}x${height}, seed=${seed}`);
+  log(`[Generate] Prompt: ${prompt.substring(0, 50)}...`);
+  
+  return new Promise((resolve, reject) => {
+    // Get the inference script path - check multiple locations
+    const possiblePaths = app.isPackaged
+      ? [
+          path.join(process.resourcesPath, 'app.asar.unpacked', 'src', 'sd_inference.py'),
+          path.join(process.resourcesPath, 'sd_inference.py'),
+          path.join(__dirname, 'sd_inference.py')
+        ]
+      : [
+          path.join(__dirname, 'sd_inference.py'),
+          path.join(process.cwd(), 'src', 'sd_inference.py')
+        ];
+    
+    let scriptPath = null;
+    for (const p of possiblePaths) {
+      if (fs.existsSync(p)) {
+        scriptPath = p;
+        break;
+      }
+    }
+    
+    if (!scriptPath) {
+      log(`[Generate] Script not found in: ${possiblePaths.join(', ')}`);
+      resolve({ success: false, error: 'Inference script not found' });
+      return;
+    }
+    
+    log(`[Generate] Using script: ${scriptPath}`);
+    
+    if (!fs.existsSync(PYTHON_EXE)) {
+      log(`[Generate] Python not found: ${PYTHON_EXE}`);
+      resolve({ success: false, error: 'Python not installed' });
+      return;
+    }
+    
+    const inputData = JSON.stringify({
+      prompt,
+      seed: seed || 42,
+      width: width || 512,
+      height: height || 512,
+      model_path: SD_MODEL_PATH,
+      is_benchmark: is_benchmark || false,
+      tile_x: tileX,
+      tile_y: tileY,
+      total_tiles_x: totalTilesX,
+      total_tiles_y: totalTilesY,
+      tile_overlap: tileOverlap
+    });
+    
+    log(`[Generate] Running: ${PYTHON_EXE} ${scriptPath}`);
+    
+    const proc = spawn(PYTHON_EXE, [scriptPath, inputData], {
+      env: {
+        ...process.env,
+        PYTHONUNBUFFERED: '1'
+      },
+      timeout: 5 * 60 * 1000 // 5 minute timeout
+    });
+    
+    let stdout = '';
+    let stderr = '';
+    
+    proc.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+    
+    proc.stderr.on('data', (data) => {
+      const msg = data.toString();
+      stderr += msg;
+      // Log SD output for debugging
+      const lines = msg.split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        log(`[SD] ${line}`);
+      }
+    });
+    
+    proc.on('close', (code) => {
+      log(`[Generate] Process exited with code ${code}`);
+      
+      if (code === 0 && stdout.trim()) {
+        try {
+          const result = JSON.parse(stdout.trim().split('\n').pop());
+          resolve(result);
+        } catch (parseErr) {
+          log(`[Generate] Failed to parse output: ${stdout.slice(-500)}`);
+          resolve({ success: false, error: 'Failed to parse generation result' });
+        }
+      } else {
+        log(`[Generate] Error output: ${stderr.slice(-500)}`);
+        resolve({ success: false, error: stderr || `Process exited with code ${code}` });
+      }
+    });
+    
+    proc.on('error', (err) => {
+      log(`[Generate] Process error: ${err.message}`);
+      resolve({ success: false, error: err.message });
+    });
+  });
+}
+
+ipcMain.handle('generate-image', async (event, params) => {
+  return await generateImage(params);
 });
 
 ipcMain.handle('download-image-ai', async () => {
-  log('Starting Image AI download...');
+  log('[ImageAI] Starting full Image AI setup...');
   
   try {
-    // Create directory if it doesn't exist
+    // Create directory
     if (!fs.existsSync(IMAGE_AI_DIR)) {
       fs.mkdirSync(IMAGE_AI_DIR, { recursive: true });
     }
     
     // Check if already downloading
     if (imageAiDownloadController) {
-      log('Image AI download already in progress');
-      return false;
+      log('[ImageAI] Download already in progress');
+      return { success: false, error: 'Download already in progress' };
     }
     
-    // Start download with progress tracking
-    const https = require('https');
-    const http = require('http');
+    const phases = [];
     
-    return new Promise((resolve, reject) => {
-      const tempPath = SD_MODEL_PATH + '.tmp';
-      const file = fs.createWriteStream(tempPath);
-      let downloadedBytes = 0;
-      let lastProgressUpdate = 0;
+    // Phase 1: Download Python if needed
+    if (!isPythonReady()) {
+      phases.push('python');
+    }
+    
+    // Phase 2: Install deps if Python ready but deps missing
+    const depsMarker = path.join(PYTHON_DIR, '.deps-installed');
+    if (!fs.existsSync(depsMarker)) {
+      phases.push('deps');
+    }
+    
+    // Phase 3: Download model if needed
+    if (!isModelReady()) {
+      phases.push('model');
+    }
+    
+    // Phase 4: Always run benchmark after setup
+    phases.push('benchmark');
+    
+    log(`[ImageAI] Phases to run: ${phases.join(', ')}`);
+    
+    // Execute phases
+    for (const phase of phases) {
+      currentDownloadPhase = phase;
       
-      const downloadUrl = SD_MODEL_URL;
-      const protocol = downloadUrl.startsWith('https') ? https : http;
+      if (mainWindow) {
+        mainWindow.webContents.send('image-ai-phase', phase);
+      }
       
-      log(`Downloading from: ${downloadUrl}`);
-      
-      const request = protocol.get(downloadUrl, { 
-        headers: { 'User-Agent': 'ComputeGrid-Worker/1.3.0' }
-      }, (response) => {
-        // Handle redirects
-        if (response.statusCode === 301 || response.statusCode === 302) {
-          const redirectUrl = response.headers.location;
-          log(`Redirecting to: ${redirectUrl}`);
-          file.close();
-          fs.unlinkSync(tempPath);
-          
-          // Follow redirect
-          const redirectProtocol = redirectUrl.startsWith('https') ? https : http;
-          redirectProtocol.get(redirectUrl, { 
-            headers: { 'User-Agent': 'ComputeGrid-Worker/1.3.0' }
-          }, handleResponse).on('error', handleError);
-          return;
+      if (phase === 'python') {
+        log('[ImageAI] Phase: Downloading Python runtime...');
+        const pythonUrl = PYTHON_URLS[process.platform];
+        if (!pythonUrl) {
+          throw new Error(`Unsupported platform: ${process.platform}`);
         }
         
-        handleResponse(response);
-      });
-      
-      function handleResponse(response) {
-        const totalBytes = parseInt(response.headers['content-length'], 10) || SD_MODEL_SIZE_BYTES;
-        log(`Download started, total size: ${(totalBytes / 1024 / 1024 / 1024).toFixed(2)}GB`);
+        const archivePath = path.join(IMAGE_AI_DIR, 'python.tar.gz');
         
-        response.pipe(file);
-        
-        response.on('data', (chunk) => {
-          downloadedBytes += chunk.length;
-          const progress = Math.floor((downloadedBytes / totalBytes) * 100);
-          
-          // Update progress every 1%
-          if (progress > lastProgressUpdate) {
-            lastProgressUpdate = progress;
-            if (mainWindow) {
-              mainWindow.webContents.send('image-ai-progress', progress);
-            }
-            if (progress % 10 === 0) {
-              log(`Image AI download: ${progress}% (${(downloadedBytes / 1024 / 1024).toFixed(0)}MB / ${(totalBytes / 1024 / 1024).toFixed(0)}MB)`);
-            }
+        await downloadFile(pythonUrl, archivePath, (progress, downloaded, total) => {
+          if (mainWindow) {
+            mainWindow.webContents.send('image-ai-progress', { 
+              phase: 'python', 
+              progress,
+              downloaded,
+              total
+            });
           }
         });
         
-        response.on('end', () => {
-          file.close(() => {
-            // Rename temp file to final
-            fs.renameSync(tempPath, SD_MODEL_PATH);
-            config.imageAiInstalled = true;
-            saveConfig();
-            sendStatusToRenderer();
-            log('Image AI download complete');
-            imageAiDownloadController = null;
-            resolve(true);
-          });
-        });
+        log('[ImageAI] Extracting Python...');
+        await extractTarGz(archivePath, PYTHON_DIR);
+        
+        // Clean up archive
+        fs.unlinkSync(archivePath);
+        log('[ImageAI] Python installed');
       }
       
-      function handleError(err) {
-        file.close();
-        if (fs.existsSync(tempPath)) {
-          fs.unlinkSync(tempPath);
-        }
-        log(`Image AI download failed: ${err.message}`);
+      if (phase === 'deps') {
+        log('[ImageAI] Phase: Installing Python dependencies...');
         if (mainWindow) {
-          mainWindow.webContents.send('image-ai-error', err.message);
+          mainWindow.webContents.send('image-ai-progress', { phase: 'deps', progress: 0 });
         }
-        imageAiDownloadController = null;
-        reject(err);
+        
+        await installPythonDeps();
+        
+        // Mark deps as installed
+        fs.writeFileSync(path.join(PYTHON_DIR, '.deps-installed'), new Date().toISOString());
+        log('[ImageAI] Dependencies installed');
       }
       
-      request.on('error', handleError);
+      if (phase === 'model') {
+        log('[ImageAI] Phase: Downloading Stable Diffusion model...');
+        
+        await downloadFile(SD_MODEL_URL, SD_MODEL_PATH, (progress, downloaded, total) => {
+          if (mainWindow) {
+            mainWindow.webContents.send('image-ai-progress', { 
+              phase: 'model', 
+              progress,
+              downloaded,
+              total
+            });
+          }
+          if (progress % 10 === 0) {
+            log(`[ImageAI] Model download: ${progress}%`);
+          }
+        });
+        
+        // Verify model size
+        const stats = fs.statSync(SD_MODEL_PATH);
+        if (stats.size < SD_MODEL_MIN_SIZE) {
+          fs.unlinkSync(SD_MODEL_PATH);
+          throw new Error(`Model file too small (${stats.size} bytes). Download may have failed.`);
+        }
+        
+        log('[ImageAI] Model downloaded and verified');
+      }
       
-      imageAiDownloadController = request;
-    });
-  } catch (err) {
-    log(`Image AI download failed: ${err.message}`);
+      if (phase === 'benchmark') {
+        log('[ImageAI] Phase: Running benchmark...');
+        const benchResult = await runBenchmark();
+        
+        if (!benchResult.success) {
+          throw new Error(`Benchmark failed: ${benchResult.error}`);
+        }
+      }
+    }
+    
+    // Mark as installed
+    config.imageAiInstalled = true;
+    saveConfig();
+    sendStatusToRenderer();
+    
+    currentDownloadPhase = 'idle';
     imageAiDownloadController = null;
-    return false;
+    
+    log('[ImageAI] Setup complete!');
+    return { success: true };
+    
+  } catch (err) {
+    log(`[ImageAI] Setup failed: ${err.message}`);
+    currentDownloadPhase = 'idle';
+    imageAiDownloadController = null;
+    
+    if (mainWindow) {
+      mainWindow.webContents.send('image-ai-error', err.message);
+    }
+    
+    return { success: false, error: err.message };
   }
 });
 
@@ -1935,16 +2405,16 @@ ipcMain.handle('cancel-image-ai-download', async () => {
 ipcMain.handle('uninstall-image-ai', async () => {
   log('Uninstalling Image AI...');
   try {
-    // Delete the Stable Diffusion model files
-    if (fs.existsSync(SD_MODEL_PATH)) {
-      fs.unlinkSync(SD_MODEL_PATH);
-      log('Deleted SD model file');
-    }
+    // Delete the entire image-ai directory (Python, model, everything)
     if (fs.existsSync(IMAGE_AI_DIR)) {
-      fs.rmdirSync(IMAGE_AI_DIR, { recursive: true });
+      fs.rmSync(IMAGE_AI_DIR, { recursive: true, force: true });
       log('Deleted Image AI directory');
     }
+    
+    // Reset all image AI config
     config.imageAiInstalled = false;
+    config.imageBenchmarkTimeMs = null;
+    config.imageQualityTier = null;
     saveConfig();
     sendStatusToRenderer();
     log('Image AI uninstalled');

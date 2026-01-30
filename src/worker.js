@@ -585,30 +585,80 @@ async function completeTask(taskId, result, actualTokens = 0) {
 const SD_API_HOST = 'http://127.0.0.1:7860'; // Default automatic1111 webui port
 let sdServerReady = false;
 
-// Check if Stable Diffusion server is running
-async function checkSdServer() {
-  return new Promise((resolve) => {
-    const http = require('http');
-    const req = http.get(`${SD_API_HOST}/sdapi/v1/options`, { timeout: 2000 }, (res) => {
-      sdServerReady = res.statusCode === 200;
-      resolve(sdServerReady);
-    });
-    req.on('error', () => {
-      sdServerReady = false;
-      resolve(false);
-    });
-    req.on('timeout', () => {
-      req.destroy();
-      sdServerReady = false;
-      resolve(false);
-    });
-  });
+// Paths for embedded Python + SD - use userData from env or fallback
+const USER_DATA_DIR = process.env.CG_USER_DATA || path.join(os.homedir(), '.computegrid');
+const IMAGE_AI_DIR = path.join(USER_DATA_DIR, 'image-ai');
+const PYTHON_DIR = path.join(IMAGE_AI_DIR, 'python');
+const SD_MODEL_PATH = path.join(IMAGE_AI_DIR, 'sd-v1-5.safetensors');
+const PYTHON_EXE = process.platform === 'win32'
+  ? path.join(PYTHON_DIR, 'python', 'python.exe')
+  : path.join(PYTHON_DIR, 'bin', 'python3');
+
+// Check if embedded SD is ready (Python + model installed)
+function isEmbeddedSdReady() {
+  const pythonExists = fs.existsSync(PYTHON_EXE);
+  const modelExists = fs.existsSync(SD_MODEL_PATH);
+  
+  if (!pythonExists) {
+    log(`Embedded SD not ready: Python not found at ${PYTHON_EXE}`);
+    return false;
+  }
+  if (!modelExists) {
+    log(`Embedded SD not ready: Model not found at ${SD_MODEL_PATH}`);
+    return false;
+  }
+  
+  // Check model file size (should be > 4GB)
+  try {
+    const stats = fs.statSync(SD_MODEL_PATH);
+    if (stats.size < 4000000000) {
+      log(`Embedded SD not ready: Model too small (${stats.size} bytes)`);
+      return false;
+    }
+  } catch (e) {
+    log(`Embedded SD not ready: Error checking model: ${e.message}`);
+    return false;
+  }
+  
+  return true;
 }
 
-// Generate image using Stable Diffusion API
-async function callStableDiffusionApi(prompt, width, height, seed, tileX, tileY, totalTilesX, totalTilesY) {
+// Find the SD inference script path
+function getSdInferenceScriptPath() {
+  // Try several locations
+  const possiblePaths = [
+    path.join(__dirname, 'sd_inference.py'),
+    path.join(process.cwd(), 'src', 'sd_inference.py'),
+    path.join(os.homedir(), '.computegrid', 'sd_inference.py')
+  ];
+  
+  // In packaged app, also check resources
+  if (process.resourcesPath) {
+    possiblePaths.unshift(path.join(process.resourcesPath, 'sd_inference.py'));
+    possiblePaths.unshift(path.join(process.resourcesPath, 'app.asar.unpacked', 'src', 'sd_inference.py'));
+  }
+  
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) {
+      log(`Found SD inference script at: ${p}`);
+      return p;
+    }
+  }
+  
+  log(`SD inference script not found in: ${possiblePaths.join(', ')}`);
+  return null;
+}
+
+// Generate image using embedded Python + diffusers
+async function callEmbeddedSdGenerate(prompt, width, height, seed, tileX, tileY, totalTilesX, totalTilesY, tileOverlap) {
   return new Promise((resolve, reject) => {
-    const http = require('http');
+    const { spawn } = require('child_process');
+    
+    const scriptPath = getSdInferenceScriptPath();
+    if (!scriptPath) {
+      reject(new Error('SD inference script not found'));
+      return;
+    }
     
     // Adjust the prompt for regional generation (tiling hint)
     const regionHint = totalTilesX > 1 || totalTilesY > 1 
@@ -616,64 +666,91 @@ async function callStableDiffusionApi(prompt, width, height, seed, tileX, tileY,
       : '';
     const fullPrompt = prompt + regionHint;
     
-    const requestData = JSON.stringify({
+    const inputData = JSON.stringify({
       prompt: fullPrompt,
-      negative_prompt: "blurry, low quality, distorted, watermark, text, artifacts",
+      seed: seed,
       width: width,
       height: height,
-      seed: seed,
-      steps: 20,
-      cfg_scale: 7,
-      sampler_name: "DPM++ 2M Karras",
-      n_iter: 1,
-      batch_size: 1
+      model_path: SD_MODEL_PATH,
+      is_benchmark: false,
+      tile_x: tileX,
+      tile_y: tileY,
+      total_tiles_x: totalTilesX,
+      total_tiles_y: totalTilesY,
+      tile_overlap: tileOverlap || 64
     });
     
-    const options = {
-      hostname: '127.0.0.1',
-      port: 7860,
-      path: '/sdapi/v1/txt2img',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(requestData)
-      },
-      timeout: 120000 // 2 minutes timeout for image generation
-    };
+    log(`[SD] Starting Python inference: ${width}x${height}, seed=${seed}`);
     
-    const req = http.request(options, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
+    const proc = spawn(PYTHON_EXE, [scriptPath, inputData], {
+      env: {
+        ...process.env,
+        PYTHONUNBUFFERED: '1'
+      }
+    });
+    
+    let stdout = '';
+    let stderr = '';
+    
+    proc.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+    
+    proc.stderr.on('data', (data) => {
+      const msg = data.toString();
+      stderr += msg;
+      // Log progress
+      const lines = msg.split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        log(`[SD] ${line}`);
+      }
+    });
+    
+    // 5 minute timeout
+    const timeout = setTimeout(() => {
+      log('[SD] Process timeout - killing');
+      proc.kill('SIGKILL');
+      reject(new Error('Image generation timed out'));
+    }, 5 * 60 * 1000);
+    
+    proc.on('close', (code) => {
+      clearTimeout(timeout);
+      log(`[SD] Process exited with code ${code}`);
+      
+      if (code === 0 && stdout.trim()) {
         try {
-          const response = JSON.parse(data);
-          if (response.images && response.images.length > 0) {
+          // Parse the last line of stdout as JSON
+          const lines = stdout.trim().split('\n');
+          const result = JSON.parse(lines[lines.length - 1]);
+          
+          if (result.success) {
             resolve({
-              success: true,
-              imageData: response.images[0], // Base64 encoded PNG
-              seed: response.info ? JSON.parse(response.info).seed : seed
+              imageData: result.image_base64,
+              seed: result.seed,
+              width: result.width,
+              height: result.height
             });
           } else {
-            reject(new Error('No images in response'));
+            reject(new Error(result.error || 'Unknown SD error'));
           }
-        } catch (e) {
-          reject(new Error(`Failed to parse SD response: ${e.message}`));
+        } catch (parseErr) {
+          log(`[SD] Failed to parse output: ${stdout.slice(-500)}`);
+          reject(new Error('Failed to parse SD output'));
         }
-      });
+      } else {
+        reject(new Error(stderr || `SD process exited with code ${code}`));
+      }
     });
     
-    req.on('error', reject);
-    req.on('timeout', () => {
-      req.destroy();
-      reject(new Error('SD API request timeout'));
+    proc.on('error', (err) => {
+      clearTimeout(timeout);
+      log(`[SD] Process error: ${err.message}`);
+      reject(err);
     });
-    
-    req.write(requestData);
-    req.end();
   });
 }
 
-// Generate image tile using Stable Diffusion via local API
+// Generate image tile using embedded Stable Diffusion
 async function generateImageTile(taskData) {
   log(`Generating image tile [${taskData.tileX},${taskData.tileY}]...`);
   
@@ -682,7 +759,7 @@ async function generateImageTile(taskData) {
       type: 'image_tile',
       tileX: taskData.tileX,
       tileY: taskData.tileY,
-      error: 'GPU not capable of image generation',
+      error: 'GPU not capable of image generation (need 6GB+ VRAM)',
       imageData: null
     };
   }
@@ -696,14 +773,13 @@ async function generateImageTile(taskData) {
     const totalTilesY = taskData.totalTilesY || 2;
     const tileWidth = taskData.imageWidth || 512;
     const tileHeight = taskData.imageHeight || 512;
+    const tileOverlap = taskData.tileOverlap || 64;
     
     log(`Tile params: prompt="${prompt.substring(0, 50)}...", seed=${seed}, position=[${tileX},${tileY}], size=${tileWidth}x${tileHeight}`);
     
-    // Check if SD server is available
-    const serverReady = await checkSdServer();
-    
-    if (!serverReady) {
-      log('Stable Diffusion server not running - returning placeholder');
+    // Check if embedded SD is ready (Python + model)
+    if (!isEmbeddedSdReady()) {
+      log('Embedded SD not ready - returning error');
       return {
         type: 'image_tile',
         tileX,
@@ -715,15 +791,15 @@ async function generateImageTile(taskData) {
         imageData: null,
         prompt,
         seed,
-        error: 'Stable Diffusion server not running. Please start the SD WebUI or ComfyUI server.'
+        error: 'Image AI not installed. Please enable Image Generation in settings and download the model.'
       };
     }
     
-    // Call the Stable Diffusion API
-    log(`Calling Stable Diffusion API for tile [${tileX},${tileY}]...`);
-    const sdResult = await callStableDiffusionApi(
+    // Generate using embedded Python + diffusers
+    log(`Calling embedded SD for tile [${tileX},${tileY}]...`);
+    const sdResult = await callEmbeddedSdGenerate(
       prompt, tileWidth, tileHeight, seed,
-      tileX, tileY, totalTilesX, totalTilesY
+      tileX, tileY, totalTilesX, totalTilesY, tileOverlap
     );
     
     const result = {
@@ -740,7 +816,7 @@ async function generateImageTile(taskData) {
       error: null
     };
     
-    log(`Image tile [${tileX},${tileY}] generation complete, size: ${sdResult.imageData ? sdResult.imageData.length : 0} bytes`);
+    log(`Image tile [${tileX},${tileY}] generation complete, size: ${sdResult.imageData ? sdResult.imageData.length : 0} chars`);
     return result;
   } catch (err) {
     log(`Image generation error: ${err.message}`);
@@ -925,6 +1001,8 @@ async function mainLoop() {
   log(`Server: ${SERVER_URL}`);
   log(`API Key: ${API_KEY ? API_KEY.substring(0, 10) + '...' : 'NOT SET'}`);
   log(`Log file: ${LOG_FILE}`);
+  log(`Image AI paths: userData=${USER_DATA_DIR}, ai=${IMAGE_AI_DIR}`);
+  log(`Image AI ready: Python=${fs.existsSync(PYTHON_EXE)}, Model=${fs.existsSync(SD_MODEL_PATH)}`);
   
   if (!API_KEY) {
     log('ERROR: API key not configured');
