@@ -161,7 +161,6 @@ let config = {
 };
 let stats = {
   tasksCompleted: 0,
-  earnings: '0.00',
   status: 'stopped',
   ollamaStatus: 'checking...',
   ollamaModels: []
@@ -321,10 +320,6 @@ function updateTrayMenu() {
       enabled: false
     },
     {
-      label: `Tokens: ${stats.earnings}`,
-      enabled: false
-    },
-    {
       label: `Tasks: ${stats.tasksCompleted}`,
       enabled: false
     },
@@ -368,7 +363,7 @@ function updateTrayMenu() {
   ]);
 
   tray.setContextMenu(contextMenu);
-  tray.setToolTip(`ComputeGrid Worker - ${isOnline ? 'Online' : 'Offline'} | ${stats.earnings} tokens`);
+  tray.setToolTip(`ComputeGrid Worker - ${isOnline ? 'Online' : 'Offline'} | ${stats.tasksCompleted} tasks`);
 }
 
 // Show notification
@@ -1227,12 +1222,6 @@ function parseWorkerOutput(message) {
   if (message.includes('Task completed')) {
     stats.tasksCompleted++;
   }
-  if (message.includes('Earned:')) {
-    const match = message.match(/Earned:\s*\$?([\d.]+)/);
-    if (match) {
-      stats.earnings = (parseFloat(stats.earnings) + parseFloat(match[1])).toFixed(2);
-    }
-  }
   sendStatusToRenderer();
   updateTrayMenu();
 }
@@ -1333,7 +1322,6 @@ function clearAppData() {
     
     stats = {
       tasksCompleted: 0,
-      earnings: '0.00',
       status: 'stopped',
       ollamaStatus: 'not installed',
       ollamaModels: []
