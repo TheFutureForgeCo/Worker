@@ -197,63 +197,96 @@ async function detectGpuInfo() {
   try {
     // Use platform-specific commands to detect GPU
     if (process.platform === 'win32') {
-      // Windows: Use WMIC with better parsing
+      // Windows: Use WMIC with list format
       const { execSync } = require('child_process');
       try {
         // Get GPU info in list format for easier parsing
         const result = execSync('wmic path win32_videocontroller get name,adapterram /format:list', { encoding: 'utf8' });
-        log('WMIC raw output: ' + result.replace(/\n/g, '|'));
+        log('WMIC raw output: ' + result.replace(/\r?\n/g, '|'));
         
-        // Parse name=value pairs
+        // Parse by splitting on blank lines to get each GPU record
+        const records = result.split(/\r?\n\r?\n/).filter(r => r.trim());
         const gpus = [];
-        let currentGpu = {};
         
-        for (const line of result.split('\n')) {
-          const trimmed = line.trim();
-          if (trimmed.startsWith('AdapterRAM=')) {
-            currentGpu.vramBytes = parseInt(trimmed.split('=')[1]) || 0;
-          } else if (trimmed.startsWith('Name=')) {
-            currentGpu.name = trimmed.split('=')[1] || 'Unknown';
+        for (const record of records) {
+          const lines = record.split(/\r?\n/);
+          const gpu = { name: null, vramBytes: null };
+          
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed.startsWith('AdapterRAM=')) {
+              const vramStr = trimmed.split('=')[1];
+              // Handle negative, overflow, or missing values
+              let vram = parseInt(vramStr) || 0;
+              // WMIC can return 32-bit signed values, handle negative/overflow
+              if (vram < 0 || vram > 68719476736) { // > 64GB is suspicious
+                vram = 0;
+              }
+              gpu.vramBytes = vram;
+            } else if (trimmed.startsWith('Name=')) {
+              gpu.name = trimmed.split('=')[1] || '';
+            }
           }
           
-          // When we have both values, save the GPU
-          if (currentGpu.name && currentGpu.vramBytes !== undefined) {
-            gpus.push({ ...currentGpu });
-            currentGpu = {};
+          // Only add if we got a name
+          if (gpu.name) {
+            gpus.push(gpu);
           }
         }
         
         log('Parsed GPUs: ' + JSON.stringify(gpus));
         
-        // Find the best GPU (highest VRAM, prefer NVIDIA/AMD)
+        // Find the best GPU (prefer NVIDIA/AMD with highest VRAM)
         let bestGpu = null;
+        
         for (const gpu of gpus) {
           const name = gpu.name.toLowerCase();
           const isNvidia = name.includes('nvidia');
           const isAmd = name.includes('amd') || name.includes('radeon');
+          const isIntel = name.includes('intel');
+          const isMicrosoft = name.includes('microsoft');
           
-          // Skip integrated Intel graphics if we have a dedicated GPU
-          if (name.includes('intel') && bestGpu) continue;
+          // Skip generic adapters
+          if (isMicrosoft) continue;
           
+          // Prefer dedicated NVIDIA/AMD GPUs
           if (isNvidia || isAmd) {
-            if (!bestGpu || gpu.vramBytes > bestGpu.vramBytes) {
+            if (!bestGpu) {
               bestGpu = gpu;
+            } else {
+              // Prefer higher VRAM
+              const bestIsIntegrated = bestGpu.name.toLowerCase().includes('intel');
+              if (bestIsIntegrated || gpu.vramBytes > (bestGpu.vramBytes || 0)) {
+                bestGpu = gpu;
+              }
             }
+          } else if (!bestGpu && !isIntel) {
+            // Unknown GPU but not Intel integrated
+            bestGpu = gpu;
           }
         }
         
         if (bestGpu) {
-          const vramGb = bestGpu.vramBytes / (1024 * 1024 * 1024);
+          const name = bestGpu.name.toLowerCase();
+          const isNvidia = name.includes('nvidia');
+          const isAmd = name.includes('amd') || name.includes('radeon');
+          const vramBytes = bestGpu.vramBytes || 0;
+          const vramGb = vramBytes / (1024 * 1024 * 1024);
+          
+          // If VRAM is unknown but it's NVIDIA/AMD, still report as capable
+          const hasKnownVram = vramBytes > 0;
           
           gpuInfo = {
-            hasGpu: true,
-            gpuVramGb: Math.round(vramGb * 10) / 10, // Round to 1 decimal
-            canGenerateImages: vramGb >= 6,
-            gpuName: bestGpu.name
+            hasGpu: isNvidia || isAmd,
+            gpuVramGb: hasKnownVram ? Math.round(vramGb * 10) / 10 : 0,
+            // Allow image gen if NVIDIA/AMD with 6GB+ OR if VRAM unknown but has NVIDIA/AMD
+            canGenerateImages: (isNvidia || isAmd) && (vramGb >= 6 || !hasKnownVram),
+            gpuName: bestGpu.name,
+            vramUnknown: !hasKnownVram && (isNvidia || isAmd)
           };
           log('Selected GPU: ' + JSON.stringify(gpuInfo));
         } else {
-          log('No NVIDIA/AMD GPU found in list');
+          log('No suitable GPU found in WMIC output');
         }
       } catch (e) {
         log('GPU detection failed on Windows: ' + e.message);
@@ -262,7 +295,7 @@ async function detectGpuInfo() {
       // Linux: Try nvidia-smi or lspci
       const { execSync } = require('child_process');
       try {
-        // Try nvidia-smi first
+        // Try nvidia-smi first (most reliable for NVIDIA)
         const result = execSync('nvidia-smi --query-gpu=name,memory.total --format=csv,noheader', { encoding: 'utf8' });
         const parts = result.trim().split(',');
         if (parts.length >= 2) {
@@ -286,9 +319,11 @@ async function detectGpuInfo() {
           
           gpuInfo = {
             hasGpu: hasNvidia || hasAmd,
-            gpuVramGb: 0, // Can't detect VRAM from lspci
-            canGenerateImages: false, // Unknown VRAM
-            gpuName: result.split(':').pop()?.trim() || 'Unknown'
+            gpuVramGb: 0,
+            // Allow if NVIDIA/AMD detected even without VRAM info
+            canGenerateImages: hasNvidia || hasAmd,
+            gpuName: result.split(':').pop()?.trim() || 'Unknown',
+            vramUnknown: true
           };
         } catch (e2) {
           log('GPU detection failed on Linux');
