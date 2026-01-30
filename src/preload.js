@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cancelImageAiDownload: () => ipcRenderer.invoke('cancel-image-ai-download'),
   uninstallImageAi: () => ipcRenderer.invoke('uninstall-image-ai'),
   reportBenchmark: (benchmarkTimeMs) => ipcRenderer.invoke('report-benchmark', benchmarkTimeMs),
+  generateImage: (params) => ipcRenderer.invoke('generate-image', params),
   
   // Event listeners
   onStatusUpdate: (callback) => {
@@ -57,6 +58,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   onImageAiProgress: (callback) => {
     ipcRenderer.on('image-ai-progress', (event, progress) => callback(progress));
+  },
+  onImageAiPhase: (callback) => {
+    ipcRenderer.on('image-ai-phase', (event, phase) => callback(phase));
+  },
+  onImageAiDepsProgress: (callback) => {
+    ipcRenderer.on('image-ai-deps-progress', (event, message) => callback(message));
+  },
+  onImageAiBenchmarkStart: (callback) => {
+    ipcRenderer.on('image-ai-benchmark-start', (event) => callback());
+  },
+  onImageAiBenchmarkComplete: (callback) => {
+    ipcRenderer.on('image-ai-benchmark-complete', (event, data) => callback(data));
+  },
+  onImageAiBenchmarkError: (callback) => {
+    ipcRenderer.on('image-ai-benchmark-error', (event, error) => callback(error));
   },
   onImageAiError: (callback) => {
     ipcRenderer.on('image-ai-error', (event, error) => callback(error));

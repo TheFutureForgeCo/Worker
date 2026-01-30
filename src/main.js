@@ -162,7 +162,7 @@ let config = {
 let stats = {
   tasksCompleted: 0,
   status: 'stopped',
-  ollamaStatus: 'checking...',
+  ollamaStatus: 'idle',  // Changed from 'checking...' - actual check happens on Go Online
   ollamaModels: []
 };
 let ollamaDownloadProgress = 0;
@@ -470,12 +470,18 @@ function loadConfig() {
     const sdModelPath = path.join(imageAiDir, 'sd-v1-5.safetensors');
     const modelExists = fs.existsSync(sdModelPath);
     
-    if (config.imageAiInstalled && !modelExists) {
-      log('Image AI model not found, updating config');
+    // Check if ALL image AI components are present (not just model)
+    const pythonExists = fs.existsSync(PYTHON_EXE);
+    const depsMarker = path.join(PYTHON_DIR, '.deps-installed');
+    const depsExist = fs.existsSync(depsMarker);
+    const fullyInstalled = pythonExists && depsExist && modelExists;
+    
+    if (config.imageAiInstalled && !fullyInstalled) {
+      log(`Image AI incomplete (python=${pythonExists}, deps=${depsExist}, model=${modelExists}), updating config`);
       config.imageAiInstalled = false;
       saveConfig();
-    } else if (!config.imageAiInstalled && modelExists) {
-      log('Image AI model found, updating config');
+    } else if (!config.imageAiInstalled && fullyInstalled) {
+      log('Image AI fully installed, updating config');
       config.imageAiInstalled = true;
       saveConfig();
     }
@@ -657,8 +663,17 @@ function showNotification(title, body) {
 // Send status to renderer
 function sendStatusToRenderer() {
   if (mainWindow && mainWindow.webContents) {
-    // Check if image AI model is installed
-    const imageAiInstalled = fs.existsSync(SD_MODEL_PATH);
+    // Check if image AI is FULLY installed (Python + deps + model)
+    const pythonReady = fs.existsSync(PYTHON_EXE);
+    const depsMarker = path.join(PYTHON_DIR, '.deps-installed');
+    const depsReady = fs.existsSync(depsMarker);
+    const modelReady = fs.existsSync(SD_MODEL_PATH);
+    const imageAiInstalled = pythonReady && depsReady && modelReady;
+    
+    // Log for debugging
+    if (config.imageAiEnabled) {
+      log(`[Status] Image AI: python=${pythonReady}, deps=${depsReady}, model=${modelReady}, installed=${imageAiInstalled}`);
+    }
     
     mainWindow.webContents.send('status-update', {
       isRunning: isWorkerRunning,
@@ -1773,18 +1788,44 @@ let currentDownloadPhase = 'idle'; // 'idle', 'python', 'deps', 'model', 'benchm
 
 // Check if Python environment is ready
 function isPythonReady() {
-  return fs.existsSync(PYTHON_EXE);
+  const ready = fs.existsSync(PYTHON_EXE);
+  log(`[ImageAI] Python ready: ${ready} (path: ${PYTHON_EXE})`);
+  return ready;
+}
+
+// Check if Python dependencies are installed
+function areDepsInstalled() {
+  const depsMarker = path.join(PYTHON_DIR, '.deps-installed');
+  const ready = fs.existsSync(depsMarker);
+  log(`[ImageAI] Deps installed: ${ready} (marker: ${depsMarker})`);
+  return ready;
 }
 
 // Check if SD model is ready
 function isModelReady() {
-  if (!fs.existsSync(SD_MODEL_PATH)) return false;
-  try {
-    const stats = fs.statSync(SD_MODEL_PATH);
-    return stats.size >= SD_MODEL_MIN_SIZE;
-  } catch {
+  if (!fs.existsSync(SD_MODEL_PATH)) {
+    log(`[ImageAI] Model not found: ${SD_MODEL_PATH}`);
     return false;
   }
+  try {
+    const stats = fs.statSync(SD_MODEL_PATH);
+    const ready = stats.size >= SD_MODEL_MIN_SIZE;
+    log(`[ImageAI] Model ready: ${ready} (size: ${stats.size} bytes)`);
+    return ready;
+  } catch (err) {
+    log(`[ImageAI] Model check error: ${err.message}`);
+    return false;
+  }
+}
+
+// Check if ALL image AI components are ready (Python + deps + model)
+function isImageAiFullyReady() {
+  const pythonOk = isPythonReady();
+  const depsOk = areDepsInstalled();
+  const modelOk = isModelReady();
+  const fullyReady = pythonOk && depsOk && modelOk;
+  log(`[ImageAI] Fully ready: ${fullyReady} (python=${pythonOk}, deps=${depsOk}, model=${modelOk})`);
+  return fullyReady;
 }
 
 ipcMain.handle('set-image-ai-enabled', async (event, enabled) => {

@@ -247,7 +247,8 @@ async function checkOllamaStatus() {
 function updateOllamaUI(status, progress = 0) {
   // Show AI status in a user-friendly way
   let displayStatus = status;
-  if (status === 'checking...') displayStatus = 'Checking AI...';
+  if (status === 'idle') displayStatus = 'Ready to connect';
+  else if (status === 'checking...') displayStatus = 'Checking AI...';
   else if (status === 'not installed') displayStatus = 'AI not installed';
   else if (status === 'installed' || status === 'ready' || status === 'AI Ready') displayStatus = 'AI Ready';
   else if (status === 'AI Engine Installed') displayStatus = 'AI Engine Installed';
@@ -668,29 +669,133 @@ if (uninstallImageAiBtn) {
   });
 }
 
+// Track current installation phase
+let currentImageAiPhase = 'idle';
+const phaseLabels = {
+  'python': 'Downloading Python runtime...',
+  'deps': 'Installing AI dependencies...',
+  'model': 'Downloading Stable Diffusion model...',
+  'benchmark': 'Running performance benchmark...'
+};
+
+// Listen for Image AI phase changes
+if (window.electronAPI.onImageAiPhase) {
+  window.electronAPI.onImageAiPhase((phase) => {
+    currentImageAiPhase = phase;
+    if (imageAiDownloadStatus) {
+      imageAiDownloadStatus.textContent = phaseLabels[phase] || phase;
+    }
+    // Reset progress bar for new phase
+    if (imageAiProgressFill) {
+      imageAiProgressFill.style.width = '0%';
+    }
+    if (imageAiProgressText) {
+      if (phase === 'benchmark') {
+        imageAiProgressText.textContent = 'Generating test image...';
+      } else if (phase === 'deps') {
+        imageAiProgressText.textContent = 'Installing packages...';
+      } else {
+        imageAiProgressText.textContent = '0%';
+      }
+    }
+  });
+}
+
 // Listen for Image AI download progress
 if (window.electronAPI.onImageAiProgress) {
-  window.electronAPI.onImageAiProgress((progress) => {
+  window.electronAPI.onImageAiProgress((data) => {
+    // Handle both old (number) and new (object) format
+    let progress, phase;
+    if (typeof data === 'number') {
+      progress = data;
+      phase = currentImageAiPhase;
+    } else {
+      progress = data.progress;
+      phase = data.phase || currentImageAiPhase;
+    }
+    
     if (imageAiProgressFill) {
       imageAiProgressFill.style.width = `${progress}%`;
     }
     if (imageAiProgressText) {
-      imageAiProgressText.textContent = `${progress}%`;
+      const downloaded = data?.downloaded ? `${Math.round(data.downloaded / 1024 / 1024)}MB` : '';
+      const total = data?.total ? `${Math.round(data.total / 1024 / 1024)}MB` : '';
+      if (downloaded && total) {
+        imageAiProgressText.textContent = `${progress}% (${downloaded} / ${total})`;
+      } else {
+        imageAiProgressText.textContent = `${progress}%`;
+      }
+    }
+  });
+}
+
+// Listen for deps installation progress
+if (window.electronAPI.onImageAiDepsProgress) {
+  window.electronAPI.onImageAiDepsProgress((message) => {
+    if (imageAiProgressText) {
+      // Show abbreviated message
+      const short = message.length > 40 ? message.substring(0, 40) + '...' : message;
+      imageAiProgressText.textContent = short;
+    }
+  });
+}
+
+// Listen for benchmark start
+if (window.electronAPI.onImageAiBenchmarkStart) {
+  window.electronAPI.onImageAiBenchmarkStart(() => {
+    if (imageAiProgressText) {
+      imageAiProgressText.textContent = 'Generating test image...';
+    }
+    if (imageAiDownloadStatus) {
+      imageAiDownloadStatus.textContent = 'Running performance benchmark...';
+    }
+  });
+}
+
+// Listen for benchmark complete
+if (window.electronAPI.onImageAiBenchmarkComplete) {
+  window.electronAPI.onImageAiBenchmarkComplete((data) => {
+    isDownloadingImageAi = false;
+    currentImageAiPhase = 'idle';
+    imageAiProgress.style.display = 'none';
+    imageAiInstalled = true;
+    
+    if (downloadImageAiBtn) {
+      downloadImageAiBtn.style.display = 'none';
+    }
+    if (uninstallImageAiBtn) {
+      uninstallImageAiBtn.style.display = 'flex';
     }
     
-    // Download complete
-    if (progress >= 100) {
-      setTimeout(() => {
-        isDownloadingImageAi = false;
-        imageAiProgress.style.display = 'none';
-        imageAiInstalled = true;
-        if (uninstallImageAiBtn) {
-          uninstallImageAiBtn.style.display = 'flex';
-        }
-        if (imageAiDownloadStatus) {
-          imageAiDownloadStatus.textContent = 'Installed - Start SD WebUI to generate';
-        }
-      }, 500);
+    const tierLabels = {
+      'fast': 'Fast (all sizes)',
+      'medium': 'Medium (up to 512px)',
+      'slow': 'Slow (256px only)',
+      'banned': 'Too slow for image tasks'
+    };
+    
+    if (imageAiDownloadStatus) {
+      imageAiDownloadStatus.textContent = 'Installed and ready';
+    }
+    if (benchmarkResult) {
+      const seconds = (data.time / 1000).toFixed(1);
+      benchmarkResult.textContent = `${seconds}s - ${tierLabels[data.tier] || data.tier}`;
+    }
+  });
+}
+
+// Listen for benchmark error
+if (window.electronAPI.onImageAiBenchmarkError) {
+  window.electronAPI.onImageAiBenchmarkError((error) => {
+    isDownloadingImageAi = false;
+    currentImageAiPhase = 'idle';
+    imageAiProgress.style.display = 'none';
+    
+    if (downloadImageAiBtn) {
+      downloadImageAiBtn.style.display = 'flex';
+    }
+    if (imageAiDownloadStatus) {
+      imageAiDownloadStatus.textContent = `Benchmark failed: ${error.substring(0, 30)}...`;
     }
   });
 }
@@ -699,10 +804,13 @@ if (window.electronAPI.onImageAiProgress) {
 if (window.electronAPI.onImageAiError) {
   window.electronAPI.onImageAiError((error) => {
     isDownloadingImageAi = false;
+    currentImageAiPhase = 'idle';
     imageAiProgress.style.display = 'none';
-    downloadImageAiBtn.style.display = 'flex';
+    if (downloadImageAiBtn) {
+      downloadImageAiBtn.style.display = 'flex';
+    }
     if (imageAiDownloadStatus) {
-      imageAiDownloadStatus.textContent = `Error: ${error.substring(0, 30)}...`;
+      imageAiDownloadStatus.textContent = `Error: ${error.substring(0, 40)}...`;
     }
   });
 }
