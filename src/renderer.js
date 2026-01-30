@@ -57,6 +57,9 @@ const uninstallBtn = document.getElementById('uninstallBtn');
 const backBtn = document.getElementById('backBtn');
 
 // DOM Elements - Image AI Section
+const gpuOverrideToggle = document.getElementById('gpuOverrideToggle');
+const gpuOverrideSwitch = document.getElementById('gpuOverrideSwitch');
+const gpuOverrideStatus = document.getElementById('gpuOverrideStatus');
 const imageAiToggle = document.getElementById('imageAiToggle');
 const imageAiSwitch = document.getElementById('imageAiSwitch');
 const imageAiStatus = document.getElementById('imageAiStatus');
@@ -470,17 +473,39 @@ if (openLogsFolderBtn) {
 let imageAiEnabled = false;
 let imageAiInstalled = false;
 let canGenerateImages = false;
+let gpuOverrideEnabled = false;
 
 // Update Image AI UI based on status
 function updateImageAiUI(status) {
   const gpuInfo = status.gpuInfo || {};
-  canGenerateImages = gpuInfo.canGenerateImages || false;
+  gpuOverrideEnabled = status.gpuOverrideEnabled || false;
+  
+  // If GPU override is enabled, treat as capable
+  canGenerateImages = gpuOverrideEnabled || gpuInfo.canGenerateImages || false;
   imageAiInstalled = status.imageAiInstalled || false;
   imageAiEnabled = status.imageAiEnabled || false;
   
+  // Update GPU override toggle
+  if (gpuOverrideSwitch) {
+    gpuOverrideSwitch.classList.toggle('active', gpuOverrideEnabled);
+  }
+  if (gpuOverrideStatus) {
+    if (gpuOverrideEnabled) {
+      gpuOverrideStatus.textContent = 'GPU manually enabled';
+    } else if (gpuInfo.hasGpu && gpuInfo.gpuVramGb >= 6) {
+      gpuOverrideStatus.textContent = `Auto-detected: ${gpuInfo.gpuName || 'GPU'} (${gpuInfo.gpuVramGb}GB)`;
+    } else if (gpuInfo.hasGpu) {
+      gpuOverrideStatus.textContent = `Auto-detected: ${gpuInfo.gpuVramGb || 0}GB (enable to override)`;
+    } else {
+      gpuOverrideStatus.textContent = 'Enable if you have a 6GB+ GPU';
+    }
+  }
+  
   // Update status text
   if (imageAiStatus) {
-    if (!gpuInfo.hasGpu) {
+    if (gpuOverrideEnabled) {
+      imageAiStatus.textContent = imageAiEnabled ? 'Enabled (GPU override)' : 'Disabled';
+    } else if (!gpuInfo.hasGpu) {
       imageAiStatus.textContent = 'No compatible GPU detected';
     } else if (gpuInfo.gpuVramGb < 6) {
       imageAiStatus.textContent = `GPU has ${gpuInfo.gpuVramGb}GB VRAM (need 6GB+)`;
@@ -492,7 +517,7 @@ function updateImageAiUI(status) {
   // Update toggle switch
   if (imageAiSwitch) {
     imageAiSwitch.classList.toggle('active', imageAiEnabled);
-    // Disable toggle if GPU not capable
+    // Enable toggle if GPU capable OR override enabled
     imageAiToggle.style.opacity = canGenerateImages ? '1' : '0.5';
     imageAiToggle.style.pointerEvents = canGenerateImages ? 'auto' : 'none';
   }
@@ -511,6 +536,20 @@ function updateImageAiUI(status) {
   if (imageAiDownloadStatus && imageAiInstalled) {
     imageAiDownloadStatus.textContent = 'Installed';
   }
+}
+
+// Toggle GPU Override
+if (gpuOverrideToggle) {
+  gpuOverrideToggle.addEventListener('click', async () => {
+    gpuOverrideEnabled = !gpuOverrideEnabled;
+    gpuOverrideSwitch.classList.toggle('active', gpuOverrideEnabled);
+    
+    await window.electronAPI.setGpuOverride(gpuOverrideEnabled);
+    
+    // Re-fetch status to update UI
+    const status = await window.electronAPI.getStatus();
+    updateImageAiUI(status);
+  });
 }
 
 // Toggle Image AI

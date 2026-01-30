@@ -637,6 +637,9 @@ function showNotification(title, body) {
 // Send status to renderer
 function sendStatusToRenderer() {
   if (mainWindow && mainWindow.webContents) {
+    // Check if image AI model is installed
+    const imageAiInstalled = fs.existsSync(SD_MODEL_PATH);
+    
     mainWindow.webContents.send('status-update', {
       isRunning: isWorkerRunning,
       isOnline,
@@ -651,7 +654,11 @@ function sendStatusToRenderer() {
       ollamaDownloadProgress,
       setupPhase,
       setupProgress,
-      lastError
+      lastError,
+      gpuInfo,
+      gpuOverrideEnabled: config.gpuOverrideEnabled || false,
+      imageAiEnabled: config.imageAiEnabled || false,
+      imageAiInstalled
     });
   }
 }
@@ -1725,6 +1732,19 @@ const SD_MODEL_URL = 'https://huggingface.co/runwayml/stable-diffusion-v1-5/reso
 const SD_MODEL_SIZE_BYTES = 4265380512; // ~4GB
 
 let imageAiDownloadController = null;
+
+ipcMain.handle('set-gpu-override', async (event, enabled) => {
+  config.gpuOverrideEnabled = enabled;
+  // If enabling override, also update gpuInfo to reflect this
+  if (enabled) {
+    gpuInfo.canGenerateImages = true;
+    gpuInfo.gpuVramGb = gpuInfo.gpuVramGb || 8; // Assume 8GB if unknown
+  }
+  saveConfig();
+  sendStatusToRenderer();
+  log('GPU override set to: ' + enabled);
+  return true;
+});
 
 ipcMain.handle('set-image-ai-enabled', async (event, enabled) => {
   config.imageAiEnabled = enabled;
