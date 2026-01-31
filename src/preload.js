@@ -77,6 +77,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onImageAiBenchmarkError: (callback) => {
     ipcRenderer.on('image-ai-benchmark-error', (event, error) => callback(error));
   },
+  onImageAiBenchmarkFallback: (callback) => {
+    ipcRenderer.on('image-ai-benchmark-fallback', (event, data) => callback(data));
+  },
   onImageAiError: (callback) => {
     ipcRenderer.on('image-ai-error', (event, error) => callback(error));
   },

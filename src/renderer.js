@@ -968,6 +968,49 @@ if (window.electronAPI.onImageAiBenchmarkError) {
   });
 }
 
+// Listen for benchmark fallback (when benchmark fails but setup proceeds anyway)
+if (window.electronAPI.onImageAiBenchmarkFallback) {
+  window.electronAPI.onImageAiBenchmarkFallback((data) => {
+    console.log('[Renderer] Benchmark fallback received:', data);
+    isDownloadingImageAi = false;
+    currentImageAiPhase = 'idle';
+    imageAiProgress.style.display = 'none';
+    imageAiInstalled = true;
+    
+    // Update state with fallback tier
+    imageBenchmarkTimeMs = null;
+    imageQualityTier = data.tier;
+    
+    // Show the benchmark status section
+    if (imageAiBenchmarkStatus) {
+      imageAiBenchmarkStatus.style.display = 'block';
+    }
+    if (imageAiBenchmarkResult) {
+      imageAiBenchmarkResult.textContent = `Quality tier: ${data.tier} (auto-detected based on GPU)`;
+    }
+    
+    // Hide download button, show installed controls
+    if (downloadImageAiBtn) {
+      downloadImageAiBtn.style.display = 'none';
+    }
+    if (uninstallImageAiBtn) {
+      uninstallImageAiBtn.style.display = 'flex';
+    }
+    if (imageAiToggleContainer) {
+      imageAiToggleContainer.style.display = 'block';
+    }
+    
+    if (imageAiDownloadStatus) {
+      imageAiDownloadStatus.textContent = `Setup complete - using ${data.tier} tier`;
+    }
+    
+    // Update the status text
+    if (imageAiStatus && imageAiEnabled) {
+      imageAiStatus.textContent = `Enabled - ${data.tier} tier`;
+    }
+  });
+}
+
 // Listen for Image AI download errors
 if (window.electronAPI.onImageAiError) {
   window.electronAPI.onImageAiError((error) => {

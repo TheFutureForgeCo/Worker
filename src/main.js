@@ -2687,7 +2687,30 @@ ipcMain.handle('download-image-ai', async () => {
         const benchResult = await runBenchmark();
         
         if (!benchResult.success) {
-          throw new Error(`Benchmark failed: ${benchResult.error}`);
+          // Benchmark failed but don't block setup - allow image generation anyway
+          log(`[ImageAI] Benchmark failed (${benchResult.error}) - proceeding with default tier`);
+          
+          // Set a conservative default quality tier based on GPU VRAM
+          const vramGb = config.gpuVramGb || 0;
+          if (vramGb >= 8) {
+            config.imageQualityTier = 'medium'; // Allow up to 512px
+          } else if (vramGb >= 6) {
+            config.imageQualityTier = 'low'; // 256px only
+          } else {
+            config.imageQualityTier = 'banned'; // Not enough VRAM
+          }
+          config.imageBenchmarkTimeMs = null; // No benchmark time available
+          saveConfig();
+          
+          log(`[ImageAI] Using fallback tier: ${config.imageQualityTier} (based on ${vramGb}GB VRAM)`);
+          
+          // Notify UI about the fallback
+          if (mainWindow) {
+            mainWindow.webContents.send('image-ai-benchmark-fallback', {
+              tier: config.imageQualityTier,
+              reason: benchResult.error
+            });
+          }
         }
       }
     }
