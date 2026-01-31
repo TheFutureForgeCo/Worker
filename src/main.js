@@ -2483,13 +2483,23 @@ async function generateImage(params) {
             l.includes('Exception') || 
             l.includes('ModuleNotFoundError') ||
             l.includes('ImportError') ||
+            l.includes('RuntimeError') ||
+            l.includes('CUDA') ||
+            l.includes('out of memory') ||
             l.includes('No module named')
           );
           if (errorLines.length > 0) {
-            errorMessage = errorLines.slice(-3).join(' | ');
+            // Get the most relevant error lines
+            const relevantErrors = errorLines.slice(-5).join(' | ');
+            // Clean up the error message for display
+            errorMessage = relevantErrors
+              .replace(/File ".*?", line \d+, in \w+/g, '')
+              .replace(/\s+/g, ' ')
+              .trim()
+              .substring(0, 300);
           } else if (lines.length > 0) {
             // Use last few lines as the error
-            errorMessage = lines.slice(-3).join(' | ');
+            errorMessage = lines.slice(-3).join(' | ').substring(0, 300);
           }
         }
         resolve({ success: false, error: errorMessage, fullError: errorOutput });
@@ -2558,6 +2568,11 @@ ipcMain.handle('download-image-ai', async () => {
         const pythonUrl = PYTHON_URLS[process.platform];
         if (!pythonUrl) {
           throw new Error(`Unsupported platform: ${process.platform}`);
+        }
+        
+        // Send initial progress event before download starts
+        if (mainWindow) {
+          mainWindow.webContents.send('image-ai-progress', { phase: 'python', progress: 0 });
         }
         
         const archivePath = path.join(IMAGE_AI_DIR, 'python.tar.gz');
@@ -2637,6 +2652,11 @@ ipcMain.handle('download-image-ai', async () => {
       
       if (phase === 'model') {
         log('[ImageAI] Phase: Downloading Stable Diffusion model...');
+        
+        // Send initial progress event before download starts
+        if (mainWindow) {
+          mainWindow.webContents.send('image-ai-progress', { phase: 'model', progress: 0 });
+        }
         
         await downloadFile(SD_MODEL_URL, SD_MODEL_PATH, (progress, downloaded, total) => {
           if (mainWindow) {

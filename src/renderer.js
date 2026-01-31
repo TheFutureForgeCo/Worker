@@ -533,8 +533,8 @@ function updateImageAiUI(status) {
     imageAiSwitch.classList.toggle('active', imageAiEnabled);
   }
   
-  // Show/hide download button
-  if (downloadImageAiBtn) {
+  // Show/hide download button - but ONLY if not currently downloading
+  if (downloadImageAiBtn && !isDownloadingImageAi) {
     downloadImageAiBtn.style.display = (imageAiEnabled && !imageAiInstalled) ? 'flex' : 'none';
   }
   
@@ -952,6 +952,7 @@ if (window.electronAPI.onImageAiBenchmarkComplete) {
 // Listen for benchmark error
 if (window.electronAPI.onImageAiBenchmarkError) {
   window.electronAPI.onImageAiBenchmarkError((error) => {
+    console.log('[Renderer] Benchmark error:', error);
     isDownloadingImageAi = false;
     currentImageAiPhase = 'idle';
     imageAiProgress.style.display = 'none';
@@ -960,7 +961,9 @@ if (window.electronAPI.onImageAiBenchmarkError) {
       downloadImageAiBtn.style.display = 'flex';
     }
     if (imageAiDownloadStatus) {
-      imageAiDownloadStatus.textContent = `Benchmark failed: ${error.substring(0, 30)}...`;
+      // Show more of the error message for debugging
+      const shortError = error.length > 100 ? error.substring(0, 100) + '...' : error;
+      imageAiDownloadStatus.textContent = `Benchmark failed: ${shortError}`;
     }
   });
 }
