@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   downloadImageAi: () => ipcRenderer.invoke('download-image-ai'),
   cancelImageAiDownload: () => ipcRenderer.invoke('cancel-image-ai-download'),
   uninstallImageAi: () => ipcRenderer.invoke('uninstall-image-ai'),
+  deleteImageAiFiles: () => ipcRenderer.invoke('delete-image-ai-files'),
   reportBenchmark: (benchmarkTimeMs) => ipcRenderer.invoke('report-benchmark', benchmarkTimeMs),
   generateImage: (params) => ipcRenderer.invoke('generate-image', params),
   

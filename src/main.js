@@ -2050,15 +2050,10 @@ async function installPythonDeps() {
   log('[Deps] Installing Python dependencies...');
   
   return new Promise((resolve, reject) => {
-    // python-build-standalone extracts to a 'python/' subfolder
-    const pipPath = process.platform === 'win32'
-      ? path.join(PYTHON_DIR, 'python', 'Scripts', 'pip.exe')
-      : path.join(PYTHON_DIR, 'python', 'bin', 'pip3');
-    
-    // Check if pip exists
-    if (!fs.existsSync(pipPath)) {
-      log(`[Deps] pip not found at ${pipPath}`);
-      reject(new Error('pip not found'));
+    // Check if Python exists first
+    if (!fs.existsSync(PYTHON_EXE)) {
+      log(`[Deps] Python not found at ${PYTHON_EXE}`);
+      reject(new Error('Python not found'));
       return;
     }
     
@@ -2074,8 +2069,10 @@ async function installPythonDeps() {
     ];
     
     log(`[Deps] Installing: ${packages.join(', ')}`);
+    log(`[Deps] Using Python at: ${PYTHON_EXE}`);
     
-    const proc = spawn(pipPath, ['install', '--no-cache-dir', ...packages], {
+    // Use python -m pip instead of calling pip directly - more reliable cross-platform
+    const proc = spawn(PYTHON_EXE, ['-m', 'pip', 'install', '--no-cache-dir', ...packages], {
       env: { ...process.env, PIP_DISABLE_PIP_VERSION_CHECK: '1' }
     });
     
@@ -2358,7 +2355,48 @@ ipcMain.handle('download-image-ai', async () => {
         
         // Clean up archive
         fs.unlinkSync(archivePath);
-        log('[ImageAI] Python installed');
+        
+        // Debug: Log directory structure after extraction
+        log(`[ImageAI] Python extracted. Checking structure...`);
+        log(`[ImageAI] PYTHON_DIR: ${PYTHON_DIR}`);
+        log(`[ImageAI] Expected PYTHON_EXE: ${PYTHON_EXE}`);
+        
+        // List what's in PYTHON_DIR
+        if (fs.existsSync(PYTHON_DIR)) {
+          const entries = fs.readdirSync(PYTHON_DIR);
+          log(`[ImageAI] Contents of PYTHON_DIR: ${entries.join(', ')}`);
+          
+          // Check for python subfolder
+          const pythonSubdir = path.join(PYTHON_DIR, 'python');
+          if (fs.existsSync(pythonSubdir)) {
+            const subEntries = fs.readdirSync(pythonSubdir);
+            log(`[ImageAI] Contents of python/: ${subEntries.join(', ')}`);
+            
+            // Check for bin folder
+            const binDir = path.join(pythonSubdir, 'bin');
+            if (fs.existsSync(binDir)) {
+              const binEntries = fs.readdirSync(binDir);
+              log(`[ImageAI] Contents of python/bin/: ${binEntries.slice(0, 10).join(', ')}${binEntries.length > 10 ? '...' : ''}`);
+            } else {
+              log(`[ImageAI] No bin/ folder at ${binDir}`);
+            }
+          } else {
+            log(`[ImageAI] No python/ subfolder at ${pythonSubdir}`);
+            // Maybe it extracted directly without subfolder?
+            const binDirect = path.join(PYTHON_DIR, 'bin');
+            if (fs.existsSync(binDirect)) {
+              const binEntries = fs.readdirSync(binDirect);
+              log(`[ImageAI] Found bin/ directly in PYTHON_DIR: ${binEntries.slice(0, 10).join(', ')}`);
+            }
+          }
+        }
+        
+        // Check if Python was actually installed
+        if (fs.existsSync(PYTHON_EXE)) {
+          log(`[ImageAI] Python installed successfully at ${PYTHON_EXE}`);
+        } else {
+          log(`[ImageAI] WARNING: Python not found at expected path ${PYTHON_EXE}`);
+        }
       }
       
       if (phase === 'deps') {
@@ -2465,6 +2503,31 @@ ipcMain.handle('uninstall-image-ai', async () => {
   } catch (err) {
     log(`Image AI uninstall failed: ${err.message}`);
     return false;
+  }
+});
+
+// Delete all image AI files (for cleanup of failed/partial installs)
+ipcMain.handle('delete-image-ai-files', async () => {
+  log('Deleting all Image AI files...');
+  try {
+    // Delete the entire image-ai directory
+    if (fs.existsSync(IMAGE_AI_DIR)) {
+      fs.rmSync(IMAGE_AI_DIR, { recursive: true, force: true });
+      log('Deleted Image AI directory');
+    }
+    
+    // Reset config flags
+    config.imageAiInstalled = false;
+    config.imageAiEnabled = false;
+    config.imageBenchmarkTimeMs = null;
+    config.imageQualityTier = null;
+    saveConfig();
+    sendStatusToRenderer();
+    log('Image AI files deleted');
+    return { success: true };
+  } catch (err) {
+    log(`Delete Image AI files failed: ${err.message}`);
+    return { success: false, error: err.message };
   }
 });
 

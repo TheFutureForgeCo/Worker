@@ -66,6 +66,8 @@ const imageAiProgress = document.getElementById('imageAiProgress');
 const imageAiProgressFill = document.getElementById('imageAiProgressFill');
 const imageAiProgressText = document.getElementById('imageAiProgressText');
 const uninstallImageAiBtn = document.getElementById('uninstallImageAiBtn');
+const deleteImageAiFilesBtn = document.getElementById('deleteImageAiFilesBtn');
+const deleteImageAiStatus = document.getElementById('deleteImageAiStatus');
 const imageBenchmarkStatus = document.getElementById('imageBenchmarkStatus');
 const benchmarkResult = document.getElementById('benchmarkResult');
 
@@ -188,11 +190,20 @@ async function init() {
   updateDashboardLink();
   
   // Show version
-  if (window.electronAPI.getVersion) {
-    const version = await window.electronAPI.getVersion();
-    if (versionBadge && version) {
-      versionBadge.textContent = `v${version}`;
+  try {
+    if (window.electronAPI && window.electronAPI.getVersion) {
+      const version = await window.electronAPI.getVersion();
+      console.log('[Renderer] Got version:', version);
+      if (versionBadge && version) {
+        versionBadge.textContent = `v${version}`;
+      } else {
+        console.log('[Renderer] versionBadge or version missing:', { versionBadge: !!versionBadge, version });
+      }
+    } else {
+      console.log('[Renderer] getVersion not available on electronAPI');
     }
+  } catch (err) {
+    console.error('[Renderer] Error getting version:', err);
   }
 }
 
@@ -664,6 +675,42 @@ if (uninstallImageAiBtn) {
       }
       if (imageAiEnabled && downloadImageAiBtn) {
         downloadImageAiBtn.style.display = 'flex';
+      }
+    }
+  });
+}
+
+// Delete Image AI Files button (always visible, for cleanup of failed/partial installs)
+if (deleteImageAiFilesBtn) {
+  deleteImageAiFilesBtn.addEventListener('click', async () => {
+    if (confirm('This will delete ALL Image AI files including Python, dependencies, and any models. Use this to cleanup failed or partial installations. Continue?')) {
+      if (deleteImageAiStatus) {
+        deleteImageAiStatus.textContent = 'Deleting files...';
+      }
+      const result = await window.electronAPI.deleteImageAiFiles();
+      if (result.success) {
+        imageAiInstalled = false;
+        imageAiEnabled = false;
+        if (deleteImageAiStatus) {
+          deleteImageAiStatus.textContent = 'Files deleted successfully!';
+          setTimeout(() => {
+            deleteImageAiStatus.textContent = 'Remove all downloaded files (cleanup failed installs)';
+          }, 3000);
+        }
+        // Update UI to reflect clean state
+        if (uninstallImageAiBtn) {
+          uninstallImageAiBtn.style.display = 'none';
+        }
+        if (imageAiDownloadStatus) {
+          imageAiDownloadStatus.textContent = '~4GB - Stable Diffusion';
+        }
+        if (imageAiSwitch) {
+          imageAiSwitch.classList.remove('active');
+        }
+      } else {
+        if (deleteImageAiStatus) {
+          deleteImageAiStatus.textContent = `Error: ${result.error}`;
+        }
       }
     }
   });
