@@ -47,8 +47,23 @@ if (!gotTheLock) {
   app.exit(0);
 }
 
-// App version and integrity
-const APP_VERSION = require('../package.json').version;
+// App version and integrity - use multiple fallback methods for packaged builds
+let APP_VERSION = '1.0.0';
+try {
+  // Method 1: Require package.json (works in dev)
+  APP_VERSION = require('../package.json').version;
+} catch (e) {
+  earlyLog(`Failed to load version from ../package.json: ${e.message}`);
+  try {
+    // Method 2: Try from app path (works in packaged)
+    const pkgPath = path.join(app.getAppPath(), 'package.json');
+    APP_VERSION = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')).version;
+  } catch (e2) {
+    earlyLog(`Failed to load version from app path: ${e2.message}`);
+    // Method 3: Hardcode fallback
+    APP_VERSION = '1.5.6';
+  }
+}
 earlyLog(`App version: ${APP_VERSION}`);
 const INTEGRITY_CHECK_INTERVAL = 5 * 60 * 1000;
 
