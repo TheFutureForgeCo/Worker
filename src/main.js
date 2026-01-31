@@ -61,7 +61,7 @@ try {
   } catch (e2) {
     earlyLog(`Failed to load version from app path: ${e2.message}`);
     // Method 3: Hardcode fallback
-    APP_VERSION = '1.5.10';
+    APP_VERSION = '1.5.11';
   }
 }
 earlyLog(`App version: ${APP_VERSION}`);
@@ -1071,7 +1071,9 @@ async function pullModel(modelName) {
   };
   
   log(`Pulling model: ${modelName}`);
-  setupPhase = 'downloading-model';
+  // Don't show overlay for model download - just update status text on main screen
+  // This prevents the confusing screen jump after Ollama binary downloads
+  setupPhase = null;
   setupProgress = 0;
   stats.ollamaStatus = `Downloading AI Model (${modelName})...`;
   sendStatusToRenderer();
@@ -2271,7 +2273,8 @@ async function runBenchmark() {
   const pythonPath = process.platform === 'win32'
     ? path.join(IMAGE_AI_DIR, 'python', 'python', 'python.exe')
     : path.join(IMAGE_AI_DIR, 'python', 'python', 'bin', 'python3');
-  const modelPath = path.join(IMAGE_AI_DIR, 'models', 'v1-5-pruned-emaonly.safetensors');
+  // Use the same path where the model is downloaded
+  const modelPath = SD_MODEL_PATH;
   
   if (!fs.existsSync(pythonPath)) {
     const errMsg = `Python not found at: ${pythonPath}`;
