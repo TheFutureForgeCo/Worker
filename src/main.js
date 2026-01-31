@@ -2695,7 +2695,7 @@ ipcMain.handle('download-image-ai', async () => {
           if (vramGb >= 8) {
             config.imageQualityTier = 'medium'; // Allow up to 512px
           } else if (vramGb >= 6) {
-            config.imageQualityTier = 'low'; // 256px only
+            config.imageQualityTier = 'slow'; // 256px only (server expects 'slow' not 'low')
           } else {
             config.imageQualityTier = 'banned'; // Not enough VRAM
           }
@@ -2703,6 +2703,31 @@ ipcMain.handle('download-image-ai', async () => {
           saveConfig();
           
           log(`[ImageAI] Using fallback tier: ${config.imageQualityTier} (based on ${vramGb}GB VRAM)`);
+          
+          // Report fallback tier to server so worker can claim image tasks
+          if (config.apiKey) {
+            try {
+              const response = await fetch(`${SERVER_URL}/api/worker/report-benchmark`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${config.apiKey}`
+                },
+                body: JSON.stringify({
+                  deviceId: deviceId,
+                  benchmarkTimeMs: 0, // No benchmark time for fallback
+                  qualityTier: config.imageQualityTier
+                })
+              });
+              if (response.ok) {
+                log('[ImageAI] Fallback tier reported to server successfully');
+              } else {
+                log('[ImageAI] Failed to report fallback tier to server: ' + response.status);
+              }
+            } catch (err) {
+              log('[ImageAI] Error reporting fallback tier to server: ' + err.message);
+            }
+          }
           
           // Notify UI about the fallback
           if (mainWindow) {
