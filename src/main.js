@@ -2633,21 +2633,12 @@ ipcMain.handle('pause-image-ai-download', async () => {
   return { success: true };
 });
 
-// Resume a paused download
+// Resume a paused download - just clears the flag, caller should then call download-image-ai
 ipcMain.handle('resume-image-ai-download', async () => {
-  log('[ImageAI] Resume requested');
+  log('[ImageAI] Resume requested - clearing paused flag');
   isDownloadPaused = false;
   currentDownloadPhase = 'idle';
-  
-  // Start the download process again - it will pick up where it left off
-  // because the .tmp files are preserved and we use HTTP Range headers
-  
-  if (mainWindow) {
-    mainWindow.webContents.send('image-ai-phase', 'resuming');
-  }
-  
-  // Trigger a new download which will resume automatically
-  return await ipcMain.emit('download-image-ai');
+  return { success: true };
 });
 
 ipcMain.handle('cancel-image-ai-download', async () => {

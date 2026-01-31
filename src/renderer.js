@@ -757,7 +757,9 @@ if (resumeImageAiBtn) {
     if (imageAiProgressTitle) {
       imageAiProgressTitle.textContent = 'Resuming download...';
     }
-    // Trigger download again - it will resume from where it left off
+    // Clear the paused flag first
+    await window.electronAPI.resumeImageAiDownload();
+    // Then trigger download again - it will resume from where it left off due to .tmp files and Range headers
     const result = await window.electronAPI.downloadImageAi();
     if (!result.success && !result.paused) {
       // Handle error
