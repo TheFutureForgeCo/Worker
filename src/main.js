@@ -61,7 +61,7 @@ try {
   } catch (e2) {
     earlyLog(`Failed to load version from app path: ${e2.message}`);
     // Method 3: Hardcode fallback
-    APP_VERSION = '1.5.8';
+    APP_VERSION = '1.5.10';
   }
 }
 earlyLog(`App version: ${APP_VERSION}`);
@@ -1111,6 +1111,13 @@ async function pullModel(modelName) {
         setupPhase = null;
         getOllamaModels();
         sendStatusToRenderer();
+        
+        // Notify renderer that Ollama setup is complete
+        if (mainWindow && mainWindow.webContents) {
+          mainWindow.webContents.send('ollama-setup-complete');
+          log('Sent ollama-setup-complete event to renderer');
+        }
+        
         resolve(true);
       }
     });

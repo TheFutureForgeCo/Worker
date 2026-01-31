@@ -905,16 +905,26 @@ if (window.electronAPI.onImageAiBenchmarkStart) {
 // Listen for benchmark complete
 if (window.electronAPI.onImageAiBenchmarkComplete) {
   window.electronAPI.onImageAiBenchmarkComplete((data) => {
+    console.log('[Renderer] Benchmark complete received:', data);
     isDownloadingImageAi = false;
     currentImageAiPhase = 'idle';
     imageAiProgress.style.display = 'none';
     imageAiInstalled = true;
+    
+    // Update the benchmark state variables so updateImageAiUI has correct data
+    imageBenchmarkTimeMs = data.time;
+    imageQualityTier = data.tier;
     
     if (downloadImageAiBtn) {
       downloadImageAiBtn.style.display = 'none';
     }
     if (uninstallImageAiBtn) {
       uninstallImageAiBtn.style.display = 'flex';
+    }
+    
+    // Show benchmark status section now that we have results
+    if (imageBenchmarkStatus) {
+      imageBenchmarkStatus.style.display = 'flex';
     }
     
     const tierLabels = {
@@ -930,6 +940,11 @@ if (window.electronAPI.onImageAiBenchmarkComplete) {
     if (benchmarkResult) {
       const seconds = (data.time / 1000).toFixed(1);
       benchmarkResult.textContent = `${seconds}s - ${tierLabels[data.tier] || data.tier}`;
+    }
+    
+    // Update the status text to reflect the tier
+    if (imageAiStatus && imageAiEnabled) {
+      imageAiStatus.textContent = `Enabled - ${data.tier} tier`;
     }
   });
 }
@@ -1028,6 +1043,17 @@ if (window.electronAPI.onImageAiDownloadReset) {
     if (imageAiProgressText) {
       imageAiProgressText.textContent = '0%';
     }
+  });
+}
+
+// Listen for Ollama setup completion
+if (window.electronAPI.onOllamaSetupComplete) {
+  window.electronAPI.onOllamaSetupComplete(async () => {
+    console.log('[Renderer] Ollama setup complete received');
+    // Force refresh status and Ollama UI
+    const status = await window.electronAPI.getStatus();
+    updateUI(status);
+    updateOllamaUI('AI Ready', 0);
   });
 }
 

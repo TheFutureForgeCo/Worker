@@ -85,5 +85,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   onAppVersion: (callback) => {
     ipcRenderer.on('app-version', (event, version) => callback(version));
+  },
+  onOllamaSetupComplete: (callback) => {
+    ipcRenderer.on('ollama-setup-complete', (event) => callback());
   }
 });
