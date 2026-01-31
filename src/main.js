@@ -61,7 +61,7 @@ try {
   } catch (e2) {
     earlyLog(`Failed to load version from app path: ${e2.message}`);
     // Method 3: Hardcode fallback
-    APP_VERSION = '1.5.7';
+    APP_VERSION = '1.5.8';
   }
 }
 earlyLog(`App version: ${APP_VERSION}`);
@@ -2680,6 +2680,23 @@ ipcMain.handle('uninstall-image-ai', async () => {
 ipcMain.handle('delete-image-ai-files', async () => {
   log('Deleting all Image AI files...');
   try {
+    // Cancel any active download first
+    if (imageAiDownloadController) {
+      try {
+        imageAiDownloadController.destroy();
+      } catch (e) {
+        log(`[ImageAI] Error destroying download controller: ${e.message}`);
+      }
+      imageAiDownloadController = null;
+    }
+    
+    // Reset download state flags - THIS IS CRITICAL for allowing restart
+    isDownloadPaused = false;
+    currentDownloadPhase = 'idle';
+    
+    // Clear download progress file (may be outside IMAGE_AI_DIR in some cases)
+    clearDownloadProgress();
+    
     // Delete the entire image-ai directory
     if (fs.existsSync(IMAGE_AI_DIR)) {
       fs.rmSync(IMAGE_AI_DIR, { recursive: true, force: true });
@@ -2693,7 +2710,14 @@ ipcMain.handle('delete-image-ai-files', async () => {
     config.imageQualityTier = null;
     saveConfig();
     sendStatusToRenderer();
-    log('Image AI files deleted');
+    
+    // Send state reset event to renderer to clear UI
+    if (mainWindow) {
+      mainWindow.webContents.send('image-ai-phase', 'idle');
+      mainWindow.webContents.send('image-ai-download-reset');
+    }
+    
+    log('Image AI files deleted, download state reset');
     return { success: true };
   } catch (err) {
     log(`Delete Image AI files failed: ${err.message}`);

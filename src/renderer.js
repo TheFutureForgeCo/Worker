@@ -704,17 +704,28 @@ if (deleteImageAiFilesBtn) {
       }
       const result = await window.electronAPI.deleteImageAiFiles();
       if (result.success) {
+        // Reset all state variables
         imageAiInstalled = false;
         imageAiEnabled = false;
+        isDownloadingImageAi = false;
+        currentImageAiPhase = 'idle';
+        
         if (deleteImageAiStatus) {
           deleteImageAiStatus.textContent = 'Files deleted successfully!';
           setTimeout(() => {
             deleteImageAiStatus.textContent = 'Remove all downloaded files (cleanup failed installs)';
           }, 3000);
         }
-        // Update UI to reflect clean state
+        
+        // Update UI to reflect clean state - hide all download-related UI
         if (uninstallImageAiBtn) {
           uninstallImageAiBtn.style.display = 'none';
+        }
+        if (imageAiProgress) {
+          imageAiProgress.style.display = 'none';
+        }
+        if (imageAiPaused) {
+          imageAiPaused.style.display = 'none';
         }
         if (imageAiDownloadStatus) {
           imageAiDownloadStatus.textContent = '~4GB - Stable Diffusion';
@@ -722,6 +733,7 @@ if (deleteImageAiFilesBtn) {
         if (imageAiSwitch) {
           imageAiSwitch.classList.remove('active');
         }
+        // Note: download button will be shown when user enables image AI again
       } else {
         if (deleteImageAiStatus) {
           deleteImageAiStatus.textContent = `Error: ${result.error}`;
@@ -982,6 +994,42 @@ window.electronAPI.onUpdateStatus((data) => {
     updateStatus.textContent = 'Check failed';
   }
 });
+
+// Listen for download reset (called when files are deleted to clear UI state)
+if (window.electronAPI.onImageAiDownloadReset) {
+  window.electronAPI.onImageAiDownloadReset(() => {
+    console.log('[Renderer] Image AI download state reset received');
+    // Reset all download-related UI state
+    isDownloadingImageAi = false;
+    currentImageAiPhase = 'idle';
+    
+    // Hide progress and paused states
+    if (imageAiProgress) {
+      imageAiProgress.style.display = 'none';
+    }
+    if (imageAiPaused) {
+      imageAiPaused.style.display = 'none';
+    }
+    
+    // Show download button again (if image AI is enabled)
+    if (downloadImageAiBtn && imageAiEnabled && !imageAiInstalled) {
+      downloadImageAiBtn.style.display = 'flex';
+    }
+    
+    // Reset status text
+    if (imageAiDownloadStatus) {
+      imageAiDownloadStatus.textContent = '~4GB - Stable Diffusion';
+    }
+    
+    // Reset progress bar
+    if (imageAiProgressFill) {
+      imageAiProgressFill.style.width = '0%';
+    }
+    if (imageAiProgressText) {
+      imageAiProgressText.textContent = '0%';
+    }
+  });
+}
 
 // Initialize on load
 init();

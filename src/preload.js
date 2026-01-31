@@ -80,6 +80,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onImageAiError: (callback) => {
     ipcRenderer.on('image-ai-error', (event, error) => callback(error));
   },
+  onImageAiDownloadReset: (callback) => {
+    ipcRenderer.on('image-ai-download-reset', (event) => callback());
+  },
   onAppVersion: (callback) => {
     ipcRenderer.on('app-version', (event, version) => callback(version));
   }
