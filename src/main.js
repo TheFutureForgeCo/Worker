@@ -2258,6 +2258,55 @@ async function runBenchmark() {
     mainWindow.webContents.send('image-ai-benchmark-start');
   }
   
+  // Pre-check that all required components exist
+  log('[Benchmark] Pre-check: Verifying Image AI components...');
+  
+  const pythonPath = process.platform === 'win32'
+    ? path.join(IMAGE_AI_DIR, 'python', 'python', 'python.exe')
+    : path.join(IMAGE_AI_DIR, 'python', 'python', 'bin', 'python3');
+  const modelPath = path.join(IMAGE_AI_DIR, 'models', 'v1-5-pruned-emaonly.safetensors');
+  
+  if (!fs.existsSync(pythonPath)) {
+    const errMsg = `Python not found at: ${pythonPath}`;
+    log(`[Benchmark] FAIL: ${errMsg}`);
+    if (mainWindow) {
+      mainWindow.webContents.send('image-ai-benchmark-error', errMsg);
+    }
+    return { success: false, error: errMsg };
+  }
+  log(`[Benchmark] Python found: ${pythonPath}`);
+  
+  if (!fs.existsSync(modelPath)) {
+    const errMsg = `Model not found at: ${modelPath}`;
+    log(`[Benchmark] FAIL: ${errMsg}`);
+    if (mainWindow) {
+      mainWindow.webContents.send('image-ai-benchmark-error', errMsg);
+    }
+    return { success: false, error: errMsg };
+  }
+  
+  // Check model file size
+  try {
+    const stats = fs.statSync(modelPath);
+    const sizeGB = (stats.size / (1024 * 1024 * 1024)).toFixed(2);
+    log(`[Benchmark] Model found: ${modelPath} (${sizeGB}GB)`);
+    if (stats.size < 3000000000) {
+      const errMsg = `Model file too small (${sizeGB}GB) - download may be incomplete`;
+      log(`[Benchmark] FAIL: ${errMsg}`);
+      if (mainWindow) {
+        mainWindow.webContents.send('image-ai-benchmark-error', errMsg);
+      }
+      return { success: false, error: errMsg };
+    }
+  } catch (e) {
+    const errMsg = `Cannot read model file: ${e.message}`;
+    log(`[Benchmark] FAIL: ${errMsg}`);
+    if (mainWindow) {
+      mainWindow.webContents.send('image-ai-benchmark-error', errMsg);
+    }
+    return { success: false, error: errMsg };
+  }
+  
   const benchmarkPrompt = 'a simple red cube on a white background, minimal, clean';
   const benchmarkSeed = 42;
   const benchmarkWidth = 256;
@@ -2266,6 +2315,7 @@ async function runBenchmark() {
   const startTime = Date.now();
   
   try {
+    log('[Benchmark] Starting image generation test...');
     const result = await generateImage({
       prompt: benchmarkPrompt,
       seed: benchmarkSeed,
@@ -2296,16 +2346,20 @@ async function runBenchmark() {
       
       return { success: true, time: totalTime, tier: config.imageQualityTier };
     } else {
-      throw new Error(result.error || 'Unknown error');
+      // Show full error details
+      const fullError = result.error || 'Unknown error during image generation';
+      log(`[Benchmark] Generation failed: ${fullError}`);
+      throw new Error(fullError);
     }
   } catch (err) {
-    log(`[Benchmark] Failed: ${err.message}`);
+    const errorDetails = err.message || String(err);
+    log(`[Benchmark] Failed: ${errorDetails}`);
     
     if (mainWindow) {
-      mainWindow.webContents.send('image-ai-benchmark-error', err.message);
+      mainWindow.webContents.send('image-ai-benchmark-error', errorDetails);
     }
     
-    return { success: false, error: err.message };
+    return { success: false, error: errorDetails };
   }
 }
 
@@ -2404,14 +2458,37 @@ async function generateImage(params) {
           resolve({ success: false, error: 'Failed to parse generation result' });
         }
       } else {
-        log(`[Generate] Error output: ${stderr.slice(-500)}`);
-        resolve({ success: false, error: stderr || `Process exited with code ${code}` });
+        // Show last 2000 chars of stderr for better debugging
+        const errorOutput = stderr.slice(-2000);
+        log(`[Generate] Error output: ${errorOutput}`);
+        
+        // Try to extract a useful error message from stderr
+        let errorMessage = `Process exited with code ${code}`;
+        if (stderr) {
+          // Look for Python traceback or error messages
+          const lines = stderr.split('\n').filter(l => l.trim());
+          const errorLines = lines.filter(l => 
+            l.includes('Error') || 
+            l.includes('error') || 
+            l.includes('Exception') || 
+            l.includes('ModuleNotFoundError') ||
+            l.includes('ImportError') ||
+            l.includes('No module named')
+          );
+          if (errorLines.length > 0) {
+            errorMessage = errorLines.slice(-3).join(' | ');
+          } else if (lines.length > 0) {
+            // Use last few lines as the error
+            errorMessage = lines.slice(-3).join(' | ');
+          }
+        }
+        resolve({ success: false, error: errorMessage, fullError: errorOutput });
       }
     });
     
     proc.on('error', (err) => {
-      log(`[Generate] Process error: ${err.message}`);
-      resolve({ success: false, error: err.message });
+      log(`[Generate] Process spawn error: ${err.message}`);
+      resolve({ success: false, error: `Failed to start Python: ${err.message}` });
     });
   });
 }

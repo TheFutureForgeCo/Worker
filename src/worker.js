@@ -130,30 +130,112 @@ async function detectGpuCapabilities() {
   log('Detecting GPU capabilities...');
   
   try {
-    // On Windows, use wmic to detect GPU
+    // On Windows, try multiple methods for GPU detection
     if (process.platform === 'win32') {
       const { execSync } = require('child_process');
+      let detected = false;
       
-      // Get GPU info using wmic
-      const wmicOutput = execSync('wmic path win32_videocontroller get name,adapterram', { encoding: 'utf8' });
-      const lines = wmicOutput.trim().split('\n').slice(1).filter(l => l.trim());
-      
-      for (const line of lines) {
-        const match = line.match(/(.+?)\s+(\d+)/);
-        if (match) {
-          const gpuName = match[1].trim();
-          const vramBytes = parseInt(match[2], 10);
-          const vramGb = Math.round(vramBytes / (1024 * 1024 * 1024));
+      // Method 1: Try nvidia-smi first (most reliable for NVIDIA)
+      try {
+        const nvidiaOutput = execSync('nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits', { 
+          encoding: 'utf8',
+          timeout: 10000,
+          stdio: ['pipe', 'pipe', 'pipe']
+        });
+        const parts = nvidiaOutput.trim().split(',').map(s => s.trim());
+        if (parts.length >= 2) {
+          const gpuName = parts[0];
+          const memMb = parseInt(parts[1], 10);
+          const vramGb = Math.round(memMb / 1024);
           
-          // Check if it's a discrete GPU (NVIDIA or AMD)
-          if (gpuName.toLowerCase().includes('nvidia') || gpuName.toLowerCase().includes('radeon') || gpuName.toLowerCase().includes('geforce')) {
-            gpuInfo.hasGpu = true;
-            gpuInfo.gpuModel = gpuName;
-            gpuInfo.gpuVramGb = vramGb;
-            gpuInfo.canGenerateImages = vramGb >= 6;
-            log(`GPU detected: ${gpuName} with ${vramGb}GB VRAM, can generate images: ${gpuInfo.canGenerateImages}`);
-            break;
+          gpuInfo.hasGpu = true;
+          gpuInfo.gpuModel = gpuName;
+          gpuInfo.gpuVramGb = vramGb;
+          gpuInfo.canGenerateImages = vramGb >= 6;
+          log(`GPU detected (nvidia-smi): ${gpuName} with ${vramGb}GB VRAM, can generate images: ${gpuInfo.canGenerateImages}`);
+          detected = true;
+        }
+      } catch (e) {
+        log(`nvidia-smi not available: ${e.message}`);
+      }
+      
+      // Method 2: Use PowerShell with proper JSON output (fallback)
+      if (!detected) {
+        try {
+          const psCommand = `powershell -NoProfile -Command "Get-CimInstance -ClassName Win32_VideoController | Select-Object Name, AdapterRAM | ConvertTo-Json -Compress"`;
+          const psOutput = execSync(psCommand, { 
+            encoding: 'utf8',
+            timeout: 15000,
+            stdio: ['pipe', 'pipe', 'pipe']
+          });
+          
+          let gpuList = JSON.parse(psOutput.trim());
+          // PowerShell returns single object if only one GPU, array if multiple
+          if (!Array.isArray(gpuList)) {
+            gpuList = [gpuList];
           }
+          
+          for (const gpu of gpuList) {
+            const gpuName = gpu.Name || '';
+            const vramBytes = parseInt(gpu.AdapterRAM, 10) || 0;
+            const vramGb = Math.round(vramBytes / (1024 * 1024 * 1024));
+            
+            log(`Found GPU: ${gpuName}, VRAM bytes: ${vramBytes}, VRAM GB: ${vramGb}`);
+            
+            // Check if it's a discrete GPU (NVIDIA or AMD)
+            if (gpuName.toLowerCase().includes('nvidia') || 
+                gpuName.toLowerCase().includes('radeon') || 
+                gpuName.toLowerCase().includes('geforce') ||
+                gpuName.toLowerCase().includes('rtx') ||
+                gpuName.toLowerCase().includes('gtx')) {
+              gpuInfo.hasGpu = true;
+              gpuInfo.gpuModel = gpuName;
+              gpuInfo.gpuVramGb = vramGb;
+              gpuInfo.canGenerateImages = vramGb >= 6;
+              log(`GPU detected (PowerShell): ${gpuName} with ${vramGb}GB VRAM, can generate images: ${gpuInfo.canGenerateImages}`);
+              detected = true;
+              break;
+            }
+          }
+        } catch (e) {
+          log(`PowerShell GPU detection failed: ${e.message}`);
+        }
+      }
+      
+      // Method 3: Fallback to wmic with better parsing
+      if (!detected) {
+        try {
+          const wmicOutput = execSync('wmic path win32_videocontroller get name,adapterram /format:csv', { 
+            encoding: 'utf8',
+            timeout: 10000 
+          });
+          const lines = wmicOutput.trim().split('\n').filter(l => l.trim() && !l.startsWith('Node'));
+          
+          for (const line of lines) {
+            const parts = line.split(',');
+            if (parts.length >= 3) {
+              // CSV format: Node,AdapterRAM,Name
+              const vramBytes = parseInt(parts[1], 10) || 0;
+              const gpuName = parts.slice(2).join(',').trim();
+              const vramGb = Math.round(vramBytes / (1024 * 1024 * 1024));
+              
+              if (gpuName.toLowerCase().includes('nvidia') || 
+                  gpuName.toLowerCase().includes('radeon') || 
+                  gpuName.toLowerCase().includes('geforce') ||
+                  gpuName.toLowerCase().includes('rtx') ||
+                  gpuName.toLowerCase().includes('gtx')) {
+                gpuInfo.hasGpu = true;
+                gpuInfo.gpuModel = gpuName;
+                gpuInfo.gpuVramGb = vramGb;
+                gpuInfo.canGenerateImages = vramGb >= 6;
+                log(`GPU detected (wmic): ${gpuName} with ${vramGb}GB VRAM, can generate images: ${gpuInfo.canGenerateImages}`);
+                detected = true;
+                break;
+              }
+            }
+          }
+        } catch (e) {
+          log(`wmic GPU detection failed: ${e.message}`);
         }
       }
     }
