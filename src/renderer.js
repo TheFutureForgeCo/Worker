@@ -982,11 +982,11 @@ if (window.electronAPI.onImageAiBenchmarkFallback) {
     imageQualityTier = data.tier;
     
     // Show the benchmark status section
-    if (imageAiBenchmarkStatus) {
-      imageAiBenchmarkStatus.style.display = 'block';
+    if (imageBenchmarkStatus) {
+      imageBenchmarkStatus.style.display = 'flex';
     }
-    if (imageAiBenchmarkResult) {
-      imageAiBenchmarkResult.textContent = `Quality tier: ${data.tier} (auto-detected based on GPU)`;
+    if (benchmarkResult) {
+      benchmarkResult.textContent = `Quality tier: ${data.tier} (auto-detected based on GPU)`;
     }
     
     // Hide download button, show installed controls
