@@ -61,7 +61,7 @@ try {
   } catch (e2) {
     earlyLog(`Failed to load version from app path: ${e2.message}`);
     // Method 3: Hardcode fallback
-    APP_VERSION = '1.5.6';
+    APP_VERSION = '1.5.7';
   }
 }
 earlyLog(`App version: ${APP_VERSION}`);
@@ -539,6 +539,12 @@ function createWindow() {
   Menu.setApplicationMenu(null);
 
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
+
+  // Push version to renderer after page loads (more reliable than IPC invoke)
+  mainWindow.webContents.on('did-finish-load', () => {
+    mainWindow.webContents.send('app-version', APP_VERSION);
+    log(`[Main] Sent app version to renderer: ${APP_VERSION}`);
+  });
 
   mainWindow.once('ready-to-show', () => {
     if (!config.startMinimized) {
@@ -1801,6 +1807,49 @@ const PYTHON_URLS = {
 
 let imageAiDownloadController = null;
 let currentDownloadPhase = 'idle'; // 'idle', 'python', 'deps', 'model', 'benchmark'
+let isDownloadPaused = false;
+const DOWNLOAD_PROGRESS_FILE = path.join(app.getPath('userData'), 'image-ai', 'download-progress.json');
+
+// Save download progress for resume capability
+function saveDownloadProgress(phase, bytesDownloaded = 0, totalBytes = 0) {
+  try {
+    const dir = path.dirname(DOWNLOAD_PROGRESS_FILE);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const progress = { phase, bytesDownloaded, totalBytes, timestamp: Date.now() };
+    fs.writeFileSync(DOWNLOAD_PROGRESS_FILE, JSON.stringify(progress));
+    log(`[ImageAI] Saved download progress: ${JSON.stringify(progress)}`);
+  } catch (err) {
+    log(`[ImageAI] Failed to save download progress: ${err.message}`);
+  }
+}
+
+// Load saved download progress
+function loadDownloadProgress() {
+  try {
+    if (fs.existsSync(DOWNLOAD_PROGRESS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(DOWNLOAD_PROGRESS_FILE, 'utf-8'));
+      log(`[ImageAI] Loaded download progress: ${JSON.stringify(data)}`);
+      return data;
+    }
+  } catch (err) {
+    log(`[ImageAI] Failed to load download progress: ${err.message}`);
+  }
+  return null;
+}
+
+// Clear download progress after successful completion
+function clearDownloadProgress() {
+  try {
+    if (fs.existsSync(DOWNLOAD_PROGRESS_FILE)) {
+      fs.unlinkSync(DOWNLOAD_PROGRESS_FILE);
+      log('[ImageAI] Cleared download progress');
+    }
+  } catch (err) {
+    log(`[ImageAI] Failed to clear download progress: ${err.message}`);
+  }
+}
 
 // Check if Python environment is ready
 function isPythonReady() {
@@ -1905,11 +1954,23 @@ ipcMain.handle('report-benchmark', async (event, benchmarkTimeMs) => {
 });
 
 // Download file with progress, proper redirects, and status checking
-function downloadFile(url, destPath, onProgress) {
+function downloadFile(url, destPath, onProgress, phaseForProgress = null) {
   return new Promise((resolve, reject) => {
     const tempPath = destPath + '.tmp';
     log(`[Download] Starting: ${url}`);
     log(`[Download] Destination: ${destPath}`);
+    
+    // Check for existing partial download
+    let resumeFromBytes = 0;
+    if (fs.existsSync(tempPath)) {
+      try {
+        const stats = fs.statSync(tempPath);
+        resumeFromBytes = stats.size;
+        log(`[Download] Found partial download: ${resumeFromBytes} bytes, will attempt resume`);
+      } catch (err) {
+        log(`[Download] Could not stat temp file: ${err.message}`);
+      }
+    }
     
     function doDownload(downloadUrl, redirectCount = 0) {
       if (redirectCount > 5) {
@@ -1917,17 +1978,32 @@ function downloadFile(url, destPath, onProgress) {
         return;
       }
       
+      // Check if paused before starting
+      if (isDownloadPaused) {
+        log('[Download] Download paused before starting');
+        reject(new Error('PAUSED'));
+        return;
+      }
+      
       const protocol = downloadUrl.startsWith('https') ? https : http;
       
+      // Set up headers with Range for resume support
+      const headers = { 
+        'User-Agent': 'ComputeGrid-Worker/1.5.0',
+        'Accept': '*/*'
+      };
+      if (resumeFromBytes > 0) {
+        headers['Range'] = `bytes=${resumeFromBytes}-`;
+        log(`[Download] Requesting with Range header: bytes=${resumeFromBytes}-`);
+      }
+      
       const request = protocol.get(downloadUrl, {
-        headers: { 
-          'User-Agent': 'ComputeGrid-Worker/1.5.0',
-          'Accept': '*/*'
-        },
+        headers,
         timeout: 30000
       }, (response) => {
         log(`[Download] Response status: ${response.statusCode}`);
         log(`[Download] Content-Length: ${response.headers['content-length']}`);
+        log(`[Download] Accept-Ranges: ${response.headers['accept-ranges']}`);
         
         // Handle redirects
         if (response.statusCode === 301 || response.statusCode === 302 || response.statusCode === 307 || response.statusCode === 308) {
@@ -1938,22 +2014,62 @@ function downloadFile(url, destPath, onProgress) {
           return;
         }
         
-        // Check for error status codes
-        if (response.statusCode !== 200) {
+        // Check for error status codes (200 = fresh, 206 = partial/resume)
+        if (response.statusCode !== 200 && response.statusCode !== 206) {
           response.resume();
           reject(new Error(`HTTP ${response.statusCode}: ${response.statusMessage}`));
           return;
         }
         
-        const totalBytes = parseInt(response.headers['content-length'], 10) || 0;
-        let downloadedBytes = 0;
-        let lastProgressUpdate = -1;
+        // If we got 200 instead of 206, server doesn't support resume - start fresh
+        if (response.statusCode === 200 && resumeFromBytes > 0) {
+          log('[Download] Server does not support resume (got 200), starting fresh');
+          resumeFromBytes = 0;
+          if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+        }
         
-        const file = fs.createWriteStream(tempPath);
+        // Calculate total bytes
+        let totalBytes;
+        if (response.statusCode === 206) {
+          // Partial content - get total from Content-Range header
+          const contentRange = response.headers['content-range'];
+          if (contentRange) {
+            const match = contentRange.match(/bytes \d+-\d+\/(\d+)/);
+            if (match) {
+              totalBytes = parseInt(match[1], 10);
+            }
+          }
+          if (!totalBytes) {
+            totalBytes = resumeFromBytes + parseInt(response.headers['content-length'], 10) || 0;
+          }
+        } else {
+          totalBytes = parseInt(response.headers['content-length'], 10) || 0;
+        }
+        
+        let downloadedBytes = resumeFromBytes;
+        let lastProgressUpdate = -1;
+        let lastProgressSave = Date.now();
+        
+        // Open file in append mode if resuming
+        const file = fs.createWriteStream(tempPath, { flags: resumeFromBytes > 0 ? 'a' : 'w' });
         
         response.pipe(file);
         
         response.on('data', (chunk) => {
+          // Check if paused during download
+          if (isDownloadPaused) {
+            log('[Download] Pause requested, aborting download');
+            request.destroy();
+            file.close(() => {
+              // Save progress before rejecting
+              if (phaseForProgress) {
+                saveDownloadProgress(phaseForProgress, downloadedBytes, totalBytes);
+              }
+              reject(new Error('PAUSED'));
+            });
+            return;
+          }
+          
           downloadedBytes += chunk.length;
           if (totalBytes > 0) {
             const progress = Math.floor((downloadedBytes / totalBytes) * 100);
@@ -1961,13 +2077,18 @@ function downloadFile(url, destPath, onProgress) {
               lastProgressUpdate = progress;
               if (onProgress) onProgress(progress, downloadedBytes, totalBytes);
             }
+            // Save progress every 10 seconds for very large files
+            if (phaseForProgress && Date.now() - lastProgressSave > 10000) {
+              lastProgressSave = Date.now();
+              saveDownloadProgress(phaseForProgress, downloadedBytes, totalBytes);
+            }
           }
         });
         
         response.on('error', (err) => {
           log(`[Download] Response error: ${err.message}`);
           file.close();
-          if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+          // Don't delete temp file on error - allow resume
           reject(err);
         });
         
@@ -2363,7 +2484,7 @@ ipcMain.handle('download-image-ai', async () => {
               total
             });
           }
-        });
+        }, 'python');
         
         log('[ImageAI] Extracting Python...');
         await extractTarGz(archivePath, PYTHON_DIR);
@@ -2442,7 +2563,7 @@ ipcMain.handle('download-image-ai', async () => {
           if (progress % 10 === 0) {
             log(`[ImageAI] Model download: ${progress}%`);
           }
-        });
+        }, 'model');
         
         // Verify model size
         const stats = fs.statSync(SD_MODEL_PATH);
@@ -2476,6 +2597,19 @@ ipcMain.handle('download-image-ai', async () => {
     return { success: true };
     
   } catch (err) {
+    // Handle pause specially - don't treat as error
+    if (err.message === 'PAUSED') {
+      log('[ImageAI] Download paused by user');
+      currentDownloadPhase = 'paused';
+      imageAiDownloadController = null;
+      
+      if (mainWindow) {
+        mainWindow.webContents.send('image-ai-phase', 'paused');
+      }
+      
+      return { success: false, paused: true };
+    }
+    
     log(`[ImageAI] Setup failed: ${err.message}`);
     currentDownloadPhase = 'idle';
     imageAiDownloadController = null;
@@ -2488,11 +2622,41 @@ ipcMain.handle('download-image-ai', async () => {
   }
 });
 
+// Pause the current download
+ipcMain.handle('pause-image-ai-download', async () => {
+  log('[ImageAI] Pause requested');
+  isDownloadPaused = true;
+  
+  // The download will be stopped in the next data chunk
+  // Progress is saved automatically
+  
+  return { success: true };
+});
+
+// Resume a paused download
+ipcMain.handle('resume-image-ai-download', async () => {
+  log('[ImageAI] Resume requested');
+  isDownloadPaused = false;
+  currentDownloadPhase = 'idle';
+  
+  // Start the download process again - it will pick up where it left off
+  // because the .tmp files are preserved and we use HTTP Range headers
+  
+  if (mainWindow) {
+    mainWindow.webContents.send('image-ai-phase', 'resuming');
+  }
+  
+  // Trigger a new download which will resume automatically
+  return await ipcMain.emit('download-image-ai');
+});
+
 ipcMain.handle('cancel-image-ai-download', async () => {
   if (imageAiDownloadController) {
     imageAiDownloadController.destroy();
     imageAiDownloadController = null;
     log('Image AI download cancelled');
+    isDownloadPaused = false;
+    clearDownloadProgress();
     return true;
   }
   return false;

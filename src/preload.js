@@ -41,6 +41,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Image AI management
   setImageAiEnabled: (enabled) => ipcRenderer.invoke('set-image-ai-enabled', enabled),
   downloadImageAi: () => ipcRenderer.invoke('download-image-ai'),
+  pauseImageAiDownload: () => ipcRenderer.invoke('pause-image-ai-download'),
+  resumeImageAiDownload: () => ipcRenderer.invoke('resume-image-ai-download'),
   cancelImageAiDownload: () => ipcRenderer.invoke('cancel-image-ai-download'),
   uninstallImageAi: () => ipcRenderer.invoke('uninstall-image-ai'),
   deleteImageAiFiles: () => ipcRenderer.invoke('delete-image-ai-files'),
@@ -77,5 +79,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   onImageAiError: (callback) => {
     ipcRenderer.on('image-ai-error', (event, error) => callback(error));
+  },
+  onAppVersion: (callback) => {
+    ipcRenderer.on('app-version', (event, version) => callback(version));
   }
 });

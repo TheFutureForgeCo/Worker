@@ -65,6 +65,11 @@ const imageAiDownloadStatus = document.getElementById('imageAiDownloadStatus');
 const imageAiProgress = document.getElementById('imageAiProgress');
 const imageAiProgressFill = document.getElementById('imageAiProgressFill');
 const imageAiProgressText = document.getElementById('imageAiProgressText');
+const imageAiProgressTitle = document.getElementById('imageAiProgressTitle');
+const pauseImageAiBtn = document.getElementById('pauseImageAiBtn');
+const imageAiPaused = document.getElementById('imageAiPaused');
+const imageAiPausedStatus = document.getElementById('imageAiPausedStatus');
+const resumeImageAiBtn = document.getElementById('resumeImageAiBtn');
 const uninstallImageAiBtn = document.getElementById('uninstallImageAiBtn');
 const deleteImageAiFilesBtn = document.getElementById('deleteImageAiFilesBtn');
 const deleteImageAiStatus = document.getElementById('deleteImageAiStatus');
@@ -189,11 +194,11 @@ async function init() {
   // Update dashboard links
   updateDashboardLink();
   
-  // Show version
+  // Show version - try IPC invoke first, but also listen for pushed version
   try {
     if (window.electronAPI && window.electronAPI.getVersion) {
       const version = await window.electronAPI.getVersion();
-      console.log('[Renderer] Got version:', version);
+      console.log('[Renderer] Got version via IPC invoke:', version);
       if (versionBadge && version) {
         versionBadge.textContent = `v${version}`;
       } else {
@@ -204,6 +209,16 @@ async function init() {
     }
   } catch (err) {
     console.error('[Renderer] Error getting version:', err);
+  }
+  
+  // Also listen for pushed version (more reliable in packaged builds)
+  if (window.electronAPI && window.electronAPI.onAppVersion) {
+    window.electronAPI.onAppVersion((version) => {
+      console.log('[Renderer] Received pushed version:', version);
+      if (versionBadge && version) {
+        versionBadge.textContent = `v${version}`;
+      }
+    });
   }
 }
 
@@ -716,22 +731,96 @@ if (deleteImageAiFilesBtn) {
   });
 }
 
+// Pause Image AI download button
+if (pauseImageAiBtn) {
+  pauseImageAiBtn.addEventListener('click', async () => {
+    console.log('[Renderer] Pause Image AI download requested');
+    const result = await window.electronAPI.pauseImageAiDownload();
+    if (result.success) {
+      // UI will be updated by the phase event
+      console.log('[Renderer] Pause request sent');
+    }
+  });
+}
+
+// Resume Image AI download button
+if (resumeImageAiBtn) {
+  resumeImageAiBtn.addEventListener('click', async () => {
+    console.log('[Renderer] Resume Image AI download requested');
+    // Hide paused state, show progress
+    if (imageAiPaused) {
+      imageAiPaused.style.display = 'none';
+    }
+    if (imageAiProgress) {
+      imageAiProgress.style.display = 'flex';
+    }
+    if (imageAiProgressTitle) {
+      imageAiProgressTitle.textContent = 'Resuming download...';
+    }
+    // Trigger download again - it will resume from where it left off
+    const result = await window.electronAPI.downloadImageAi();
+    if (!result.success && !result.paused) {
+      // Handle error
+      if (imageAiProgress) {
+        imageAiProgress.style.display = 'none';
+      }
+      if (downloadImageAiBtn) {
+        downloadImageAiBtn.style.display = 'flex';
+      }
+      if (imageAiDownloadStatus) {
+        imageAiDownloadStatus.textContent = `Error: ${result.error}`;
+      }
+    }
+  });
+}
+
 // Track current installation phase
 let currentImageAiPhase = 'idle';
 const phaseLabels = {
   'python': 'Downloading Python runtime...',
   'deps': 'Installing AI dependencies...',
   'model': 'Downloading Stable Diffusion model...',
-  'benchmark': 'Running performance benchmark...'
+  'benchmark': 'Running performance benchmark...',
+  'paused': 'Download paused',
+  'resuming': 'Resuming download...'
 };
 
 // Listen for Image AI phase changes
 if (window.electronAPI.onImageAiPhase) {
   window.electronAPI.onImageAiPhase((phase) => {
     currentImageAiPhase = phase;
+    console.log('[Renderer] Image AI phase changed to:', phase);
+    
     if (imageAiDownloadStatus) {
       imageAiDownloadStatus.textContent = phaseLabels[phase] || phase;
     }
+    
+    // Handle paused state
+    if (phase === 'paused') {
+      if (imageAiProgress) {
+        imageAiProgress.style.display = 'none';
+      }
+      if (imageAiPaused) {
+        imageAiPaused.style.display = 'flex';
+      }
+      return;
+    }
+    
+    // For any other phase, hide paused state and show progress
+    if (phase !== 'idle') {
+      if (imageAiPaused) {
+        imageAiPaused.style.display = 'none';
+      }
+      if (imageAiProgress) {
+        imageAiProgress.style.display = 'flex';
+      }
+    }
+    
+    // Update progress title based on phase
+    if (imageAiProgressTitle) {
+      imageAiProgressTitle.textContent = phaseLabels[phase] || 'Downloading Image AI...';
+    }
+    
     // Reset progress bar for new phase
     if (imageAiProgressFill) {
       imageAiProgressFill.style.width = '0%';

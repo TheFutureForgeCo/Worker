@@ -1094,7 +1094,7 @@
         <div class="settings-item" id="imageAiProgress" style="display: none;">
           <div class="settings-item-icon">&#128230;</div>
           <div class="settings-item-content">
-            <div class="settings-item-title">Downloading Image AI...</div>
+            <div class="settings-item-title" id="imageAiProgressTitle">Downloading Image AI...</div>
             <div class="settings-item-subtitle">
               <div class="mini-progress-bar">
                 <div class="mini-progress-fill" id="imageAiProgressFill" style="width: 0%;"></div>
@@ -1102,6 +1102,15 @@
               <span id="imageAiProgressText">0%</span>
             </div>
           </div>
+          <div class="settings-item-action" id="pauseImageAiBtn" title="Pause Download" style="cursor: pointer; font-size: 1.2em;">&#9208;</div>
+        </div>
+        <div class="settings-item" id="imageAiPaused" style="display: none;">
+          <div class="settings-item-icon">&#9208;</div>
+          <div class="settings-item-content">
+            <div class="settings-item-title">Download Paused</div>
+            <div class="settings-item-subtitle" id="imageAiPausedStatus">Click Resume to continue downloading</div>
+          </div>
+          <button class="btn btn-primary btn-sm" id="resumeImageAiBtn" style="padding: 0.25rem 0.75rem; font-size: 0.8rem;">Resume</button>
         </div>
         <div class="settings-item" id="imageBenchmarkStatus" style="display: none;">
           <div class="settings-item-icon">&#128202;</div>
