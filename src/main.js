@@ -61,7 +61,7 @@ try {
   } catch (e2) {
     earlyLog(`Failed to load version from app path: ${e2.message}`);
     // Method 3: Hardcode fallback
-    APP_VERSION = '1.5.18';
+    APP_VERSION = '1.5.19';
   }
 }
 earlyLog(`App version: ${APP_VERSION}`);
@@ -1461,6 +1461,8 @@ async function startWorker() {
         CG_APP_SIGNATURE: appSignature,
         CG_LOG_DIR: logDir,
         CG_USER_DATA: app.getPath('userData'),  // Pass userData path for image AI
+        CG_IMAGE_QUALITY_TIER: config.imageQualityTier || 'none',  // Pass image quality tier from benchmark
+        CG_IMAGE_BENCHMARK_MS: String(config.imageBenchmarkTimeMs || 0),  // Pass benchmark time
         ELECTRON_RUN_AS_NODE: '1'  // Critical: tells Electron to run as Node.js
       },
       stdio: ['pipe', 'pipe', 'pipe', 'ipc'],

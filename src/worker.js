@@ -33,6 +33,8 @@ earlyLog(`Log file: ${LOG_FILE}`);
 earlyLog(`CG_API_KEY set: ${process.env.CG_API_KEY ? 'yes' : 'no'}`);
 earlyLog(`CG_SERVER_URL: ${process.env.CG_SERVER_URL || 'NOT SET'}`);
 earlyLog(`CG_APP_VERSION: ${process.env.CG_APP_VERSION || 'NOT SET'}`);
+earlyLog(`CG_IMAGE_QUALITY_TIER: ${process.env.CG_IMAGE_QUALITY_TIER || 'NOT SET'}`);
+earlyLog(`CG_IMAGE_BENCHMARK_MS: ${process.env.CG_IMAGE_BENCHMARK_MS || 'NOT SET'}`);
 earlyLog(`IPC available: ${typeof process.send === 'function' ? 'yes' : 'no'}`);
 earlyLog('='.repeat(60));
 
@@ -329,6 +331,10 @@ async function reportCapabilities() {
     const imageAiReady = isEmbeddedSdReady();
     const canDoImages = gpuInfo.canGenerateImages && imageAiReady;
     
+    // Get image quality tier and benchmark time from environment (set by main.js)
+    const imageQualityTier = process.env.CG_IMAGE_QUALITY_TIER || 'none';
+    const imageBenchmarkTimeMs = parseInt(process.env.CG_IMAGE_BENCHMARK_MS, 10) || 0;
+    
     const systemInfo = {
       hasGpu: gpuInfo.hasGpu,
       canGenerateImages: canDoImages,
@@ -338,10 +344,12 @@ async function reportCapabilities() {
       countryCode: workerCountryCode,
       internetSpeedMbps,
       cpuCores: os.cpus().length,
-      memoryGb: Math.round(os.totalmem() / (1024 * 1024 * 1024))
+      memoryGb: Math.round(os.totalmem() / (1024 * 1024 * 1024)),
+      imageQualityTier: canDoImages ? imageQualityTier : 'none',
+      imageBenchmarkTimeMs: canDoImages ? imageBenchmarkTimeMs : 0
     };
     
-    log(`Image AI status: ready=${imageAiReady}, canGenerate=${canDoImages}`);
+    log(`Image AI status: ready=${imageAiReady}, canGenerate=${canDoImages}, tier=${imageQualityTier}, benchmarkMs=${imageBenchmarkTimeMs}`);
     
     const response = await makeRequest(`${SERVER_URL}/api/worker/capabilities`, {
       method: 'POST',
