@@ -325,8 +325,13 @@ async function reportCapabilities() {
   log('Reporting capabilities to server...');
   
   try {
+    // Check if embedded SD (image AI) is ready
+    const imageAiReady = isEmbeddedSdReady();
+    const canDoImages = gpuInfo.canGenerateImages && imageAiReady;
+    
     const systemInfo = {
       hasGpu: gpuInfo.hasGpu,
+      canGenerateImages: canDoImages,
       gpuModel: gpuInfo.gpuModel,
       gpuVramGb: gpuInfo.gpuVramGb,
       region: workerRegion,
@@ -335,6 +340,8 @@ async function reportCapabilities() {
       cpuCores: os.cpus().length,
       memoryGb: Math.round(os.totalmem() / (1024 * 1024 * 1024))
     };
+    
+    log(`Image AI status: ready=${imageAiReady}, canGenerate=${canDoImages}`);
     
     const response = await makeRequest(`${SERVER_URL}/api/worker/capabilities`, {
       method: 'POST',
@@ -593,10 +600,14 @@ async function pollForTasks() {
       
       // Check for tasks array (new format) or single task
       if (response.data?.tasks?.length > 0) {
-        return response.data.tasks[0];
+        const task = response.data.tasks[0];
+        log(`Task available: id=${task.id}, type=${task.taskType}`);
+        return task;
       }
       if (response.data?.task) {
-        return response.data.task;
+        const task = response.data.task;
+        log(`Task available: id=${task.id}, type=${task.taskType}`);
+        return task;
       }
       
       return null;
@@ -952,7 +963,20 @@ async function processTask(task) {
     
     // Handle image generation tasks
     if (task.taskType === 'image_generation') {
+      log(`[Image Task] Processing image generation task: ${task.id}`);
+      log(`[Image Task] Task data: ${JSON.stringify(taskData).substring(0, 200)}...`);
+      
+      // Check if image AI is ready
+      if (!isEmbeddedSdReady()) {
+        log('[Image Task] ERROR: Image AI is not ready!');
+        log(`[Image Task] Python exists: ${fs.existsSync(PYTHON_EXE)}`);
+        log(`[Image Task] Model exists: ${fs.existsSync(SD_MODEL_PATH)}`);
+        throw new Error('Image AI not ready - Python or model not installed');
+      }
+      
+      log('[Image Task] Image AI is ready, generating...');
       const imageResult = await generateImageTile(taskData);
+      log(`[Image Task] Generation complete: success=${imageResult.success}`);
       result = JSON.stringify(imageResult);
       tokens = 0; // Images don't have tokens
     }

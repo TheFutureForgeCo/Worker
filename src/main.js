@@ -61,7 +61,7 @@ try {
   } catch (e2) {
     earlyLog(`Failed to load version from app path: ${e2.message}`);
     // Method 3: Hardcode fallback
-    APP_VERSION = '1.5.11';
+    APP_VERSION = '1.5.17';
   }
 }
 earlyLog(`App version: ${APP_VERSION}`);
@@ -1902,6 +1902,93 @@ function isImageAiFullyReady() {
   return fullyReady;
 }
 
+// Check and auto-run benchmark if Image AI is ready but no benchmark exists
+async function checkAndRunBenchmarkIfNeeded() {
+  log('[ImageAI] Checking if benchmark is needed...');
+  
+  // Only check if image AI is enabled
+  if (!config.imageAiEnabled) {
+    log('[ImageAI] Image AI not enabled, skipping benchmark check');
+    return;
+  }
+  
+  // Check if Image AI is fully ready
+  if (!isImageAiFullyReady()) {
+    log('[ImageAI] Image AI not fully ready, skipping benchmark check');
+    return;
+  }
+  
+  // Check if we already have a valid benchmark result
+  if (config.imageBenchmarkTimeMs && config.imageQualityTier && config.imageQualityTier !== 'none') {
+    log(`[ImageAI] Benchmark already exists: ${config.imageBenchmarkTimeMs}ms, tier=${config.imageQualityTier}`);
+    return;
+  }
+  
+  // Need to run benchmark!
+  log('[ImageAI] No valid benchmark found, running benchmark now...');
+  
+  // Notify UI
+  if (mainWindow) {
+    mainWindow.webContents.send('image-ai-phase', 'benchmark');
+    mainWindow.webContents.send('image-ai-benchmark-start');
+  }
+  
+  const benchResult = await runBenchmark();
+  
+  if (benchResult.success) {
+    log(`[ImageAI] Auto-benchmark completed: ${benchResult.time}ms, tier=${benchResult.tier}`);
+  } else {
+    log(`[ImageAI] Auto-benchmark failed: ${benchResult.error}`);
+    
+    // Set a fallback tier based on GPU VRAM
+    const vramGb = config.gpuVramGb || 0;
+    if (vramGb >= 8) {
+      config.imageQualityTier = 'medium';
+    } else if (vramGb >= 6) {
+      config.imageQualityTier = 'slow';
+    } else {
+      config.imageQualityTier = 'slow'; // Default to slow rather than banned
+    }
+    config.imageBenchmarkTimeMs = null;
+    saveConfig();
+    
+    log(`[ImageAI] Using fallback tier: ${config.imageQualityTier} (based on ${vramGb}GB VRAM)`);
+    
+    // Report fallback tier to server
+    if (config.apiKey) {
+      try {
+        const response = await fetch(`${SERVER_URL}/api/worker/report-benchmark`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${config.apiKey}`
+          },
+          body: JSON.stringify({
+            deviceId: deviceId,
+            benchmarkTimeMs: 0,
+            qualityTier: config.imageQualityTier
+          })
+        });
+        if (response.ok) {
+          log('[ImageAI] Fallback tier reported to server successfully');
+        } else {
+          log('[ImageAI] Failed to report fallback tier: ' + response.status);
+        }
+      } catch (err) {
+        log('[ImageAI] Error reporting fallback tier: ' + err.message);
+      }
+    }
+    
+    // Notify UI
+    if (mainWindow) {
+      mainWindow.webContents.send('image-ai-benchmark-fallback', {
+        tier: config.imageQualityTier,
+        reason: benchResult.error
+      });
+    }
+  }
+}
+
 ipcMain.handle('set-image-ai-enabled', async (event, enabled) => {
   config.imageAiEnabled = enabled;
   saveConfig();
@@ -3214,6 +3301,15 @@ app.whenReady().then(async () => {
       mainWindow.focus();
     }
   });
+  
+  // Check if Image AI needs benchmark (after window is ready for notifications)
+  setTimeout(async () => {
+    try {
+      await checkAndRunBenchmarkIfNeeded();
+    } catch (err) {
+      log('[ImageAI] Auto-benchmark check failed: ' + err.message);
+    }
+  }, 3000); // Give window time to fully load
   
   // Auto-start worker if configured
   if (config.autoStart && config.apiKey) {
