@@ -8,6 +8,9 @@ const http = require('http');
 const os = require('os');
 const { autoUpdater } = require('electron-updater');
 
+// Bundle manager for pre-packaged AI assets
+const bundleManager = require('./bundle-manager');
+
 // ============== EARLY DEBUG LOGGING ==============
 // This runs immediately when the app starts, before anything else
 const EARLY_LOG_PATH = path.join(app.getPath('userData'), 'startup-debug.log');
@@ -78,6 +81,38 @@ const OLLAMA_HOST = 'http://127.0.0.1:11434';
 const OLLAMA_DIR = path.join(app.getPath('userData'), 'ollama');
 const OLLAMA_MODELS_DIR = path.join(OLLAMA_DIR, 'models');
 const OLLAMA_BIN_DIR = path.join(OLLAMA_DIR, 'bin');
+
+// Unified AI paths resolution - returns bundled paths when bundle is installed
+function getAiPaths() {
+  // Check if bundle is installed and configured
+  if (config && config.bundleInstalled) {
+    const bundlePaths = bundleManager.getBundlePaths();
+    if (bundlePaths.isValid) {
+      return {
+        useBundled: true,
+        ollamaBinary: bundlePaths.ollamaBinary,
+        ollamaModelsDir: bundlePaths.ollamaModelsDir,
+        pythonDir: bundlePaths.pythonDir,
+        pythonExe: bundlePaths.pythonExe,
+        sdModelPath: bundlePaths.sdModelPath,
+        imageGenScript: bundlePaths.imageGenScript
+      };
+    }
+  }
+  
+  // Fall back to legacy paths
+  return {
+    useBundled: false,
+    ollamaBinary: getOllamaBinaryPath(),
+    ollamaModelsDir: OLLAMA_MODELS_DIR,
+    pythonDir: path.join(app.getPath('userData'), 'image-ai', 'python'),
+    pythonExe: process.platform === 'win32'
+      ? path.join(app.getPath('userData'), 'image-ai', 'python', 'python.exe')
+      : path.join(app.getPath('userData'), 'image-ai', 'python', 'bin', 'python'),
+    sdModelPath: path.join(app.getPath('userData'), 'image-ai', 'sd-onnx'),
+    imageGenScript: null
+  };
+}
 
 // Get the correct path for the worker script (handles packaged app)
 function getWorkerScriptPath() {
@@ -482,7 +517,7 @@ function loadConfig() {
     
     // Verify Image AI installation status by checking if model file exists
     const imageAiDir = path.join(app.getPath('userData'), 'image-ai');
-    const sdModelPath = path.join(imageAiDir, 'sd-v1-5.safetensors');
+    const sdModelPath = path.join(imageAiDir, 'sd-onnx', 'model_index.json');
     const modelExists = fs.existsSync(sdModelPath);
     
     // Check if ALL image AI components are present (not just model)
@@ -697,7 +732,7 @@ function sendStatusToRenderer() {
     const pythonReady = fs.existsSync(PYTHON_EXE);
     const depsMarker = path.join(PYTHON_DIR, '.deps-installed');
     const depsReady = fs.existsSync(depsMarker);
-    const modelReady = fs.existsSync(SD_MODEL_PATH);
+    const modelReady = fs.existsSync(SD_MODEL_INDEX_PATH);
     const imageAiInstalled = pythonReady && depsReady && modelReady;
     
     // Log for debugging
@@ -1819,17 +1854,18 @@ ipcMain.handle('open-external', (event, url) => {
 
 // Image AI management
 const IMAGE_AI_DIR = path.join(app.getPath('userData'), 'image-ai');
-const SD_MODEL_PATH = path.join(IMAGE_AI_DIR, 'sd-v1-5.safetensors');
+const SD_MODEL_DIR = path.join(IMAGE_AI_DIR, 'sd-onnx'); // ONNX models are stored in a directory
+const SD_MODEL_PATH = SD_MODEL_DIR; // For compatibility with existing code
 const PYTHON_DIR = path.join(IMAGE_AI_DIR, 'python');
 // python-build-standalone extracts to a 'python/' subfolder containing bin/
 const PYTHON_EXE = process.platform === 'win32' 
   ? path.join(PYTHON_DIR, 'python', 'python.exe')
   : path.join(PYTHON_DIR, 'python', 'bin', 'python3');
 
-// Use a CDN mirror that doesn't require auth - civitai hosts many models
-const SD_MODEL_URL = 'https://civitai.com/api/download/models/11745'; // SD 1.5 base model
-const SD_MODEL_SIZE_BYTES = 4265380512; // ~4GB
-const SD_MODEL_MIN_SIZE = 4000000000; // Minimum valid size (4GB)
+// ONNX model ID from Hugging Face - will be downloaded automatically by diffusers
+const SD_ONNX_MODEL_ID = 'runwayml/stable-diffusion-v1-5';
+// The model is downloaded on first use, so we check for the model_index.json file
+const SD_MODEL_INDEX_PATH = path.join(SD_MODEL_DIR, 'model_index.json');
 
 // Portable Python URLs for each platform
 const PYTHON_URLS = {
@@ -1899,21 +1935,20 @@ function areDepsInstalled() {
   return ready;
 }
 
-// Check if SD model is ready
+// Check if SD ONNX model is ready
 function isModelReady() {
-  if (!fs.existsSync(SD_MODEL_PATH)) {
-    log(`[ImageAI] Model not found: ${SD_MODEL_PATH}`);
+  // For ONNX models, check if the model directory exists and has model_index.json
+  if (!fs.existsSync(SD_MODEL_DIR)) {
+    log(`[ImageAI] ONNX model directory not found: ${SD_MODEL_DIR}`);
     return false;
   }
-  try {
-    const stats = fs.statSync(SD_MODEL_PATH);
-    const ready = stats.size >= SD_MODEL_MIN_SIZE;
-    log(`[ImageAI] Model ready: ${ready} (size: ${stats.size} bytes)`);
-    return ready;
-  } catch (err) {
-    log(`[ImageAI] Model check error: ${err.message}`);
+  // Check for model_index.json which indicates model is downloaded
+  if (!fs.existsSync(SD_MODEL_INDEX_PATH)) {
+    log(`[ImageAI] ONNX model index not found: ${SD_MODEL_INDEX_PATH}`);
     return false;
   }
+  log(`[ImageAI] ONNX model ready at: ${SD_MODEL_DIR}`);
+  return true;
 }
 
 // Check if ALL image AI components are ready (Python + deps + model)
@@ -2073,6 +2108,57 @@ async function reportBenchmarkResult(benchmarkTimeMs) {
 ipcMain.handle('report-benchmark', async (event, benchmarkTimeMs) => {
   return await reportBenchmarkResult(benchmarkTimeMs);
 });
+
+// ========== BUNDLE MANAGEMENT IPC HANDLERS ==========
+
+// Check if bundled AI is installed
+ipcMain.handle('check-bundle-status', async () => {
+  log('[Bundle] Checking bundle status...');
+  const status = bundleManager.isBundleInstalled();
+  log(`[Bundle] Status: ${JSON.stringify(status)}`);
+  return status;
+});
+
+// Get bundle paths
+ipcMain.handle('get-bundle-paths', async () => {
+  return bundleManager.getBundlePaths();
+});
+
+// Install bundled AI assets
+ipcMain.handle('install-bundle', async () => {
+  log('[Bundle] Starting bundle installation...');
+  
+  const result = await bundleManager.installBundle(
+    // Progress callback
+    (progress) => {
+      if (mainWindow) {
+        mainWindow.webContents.send('bundle-progress', progress);
+      }
+    },
+    // Status callback
+    (status) => {
+      log(`[Bundle] ${status}`);
+      if (mainWindow) {
+        mainWindow.webContents.send('bundle-status', status);
+      }
+    }
+  );
+  
+  if (result.success) {
+    log('[Bundle] Installation complete!');
+    // Update paths to use bundled assets
+    config.bundleInstalled = true;
+    config.bundleVersion = result.version;
+    saveConfig();
+    sendStatusToRenderer();
+  } else {
+    log(`[Bundle] Installation failed: ${result.error}`);
+  }
+  
+  return result;
+});
+
+// ========== END BUNDLE MANAGEMENT ==========
 
 // Retry benchmark manually from UI
 ipcMain.handle('retry-image-benchmark', async () => {
@@ -2487,9 +2573,9 @@ async function installVcRedist() {
   }
 }
 
-// Install Python dependencies (diffusers, torch, etc.)
+// Install Python dependencies using ONNX Runtime (simpler, no DLL issues)
 async function installPythonDeps() {
-  log('[Deps] Installing Python dependencies...');
+  log('[Deps] Installing Python dependencies (ONNX Runtime)...');
   
   // Check if Python exists first
   if (!fs.existsSync(PYTHON_EXE)) {
@@ -2551,90 +2637,71 @@ async function installPythonDeps() {
     });
   };
   
-  // Step 0: On Windows, ensure Visual C++ Redistributable is installed (required by PyTorch/fbgemm.dll)
-  if (process.platform === 'win32') {
-    log('[Deps] Step 0: Checking Visual C++ Redistributable...');
-    await installVcRedist();
-  }
-  
-  // Step 1: Install PyTorch with CUDA support from PyTorch's index
-  // Using CUDA 12.1 which is compatible with most modern NVIDIA drivers
-  log('[Deps] Step 1/3: Installing PyTorch with CUDA 12.1 support...');
+  // Step 1: Install ONNX Runtime with GPU support
+  // ONNX Runtime GPU comes as pre-built binaries - no DLL issues like PyTorch
+  log('[Deps] Step 1/2: Installing ONNX Runtime with GPU support...');
   if (mainWindow) {
-    mainWindow.webContents.send('image-ai-deps-progress', 'Installing PyTorch with CUDA support (this is a large download)...');
+    mainWindow.webContents.send('image-ai-deps-progress', 'Installing ONNX Runtime GPU...');
   }
   
   try {
-    await runPipInstall(
-      ['torch', 'torchvision'],
-      ['--index-url', 'https://download.pytorch.org/whl/cu121']
-    );
-    log('[Deps] PyTorch with CUDA installed successfully');
+    // onnxruntime-gpu includes CUDA support with bundled DLLs
+    await runPipInstall(['onnxruntime-gpu']);
+    log('[Deps] ONNX Runtime GPU installed successfully');
   } catch (err) {
-    // If CUDA 12.1 fails, try CUDA 11.8 for older drivers
-    log('[Deps] CUDA 12.1 failed, trying CUDA 11.8...');
+    // Fall back to CPU-only if GPU fails
+    log('[Deps] ONNX Runtime GPU failed, trying CPU version...');
     if (mainWindow) {
-      mainWindow.webContents.send('image-ai-deps-progress', 'Trying PyTorch with CUDA 11.8...');
+      mainWindow.webContents.send('image-ai-deps-progress', 'Installing ONNX Runtime (CPU)...');
     }
-    await runPipInstall(
-      ['torch', 'torchvision'],
-      ['--index-url', 'https://download.pytorch.org/whl/cu118']
-    );
-    log('[Deps] PyTorch with CUDA 11.8 installed successfully');
+    await runPipInstall(['onnxruntime']);
+    log('[Deps] ONNX Runtime CPU installed successfully');
   }
   
-  // Step 2: Install xformers for memory-efficient attention (optional but recommended)
-  log('[Deps] Step 2/3: Installing xformers...');
-  if (mainWindow) {
-    mainWindow.webContents.send('image-ai-deps-progress', 'Installing xformers for better performance...');
-  }
-  
-  try {
-    await runPipInstall(['xformers'], ['--index-url', 'https://download.pytorch.org/whl/cu121']);
-    log('[Deps] xformers installed successfully');
-  } catch (err) {
-    // xformers is optional, continue if it fails
-    log('[Deps] xformers installation failed (optional, continuing): ' + err.message);
-  }
-  
-  // Step 3: Install other dependencies from PyPI
-  log('[Deps] Step 3/3: Installing diffusers and other dependencies...');
+  // Step 2: Install diffusers with ONNX support and other dependencies
+  log('[Deps] Step 2/2: Installing diffusers and dependencies...');
   if (mainWindow) {
     mainWindow.webContents.send('image-ai-deps-progress', 'Installing diffusers and dependencies...');
   }
   
-  const otherPackages = [
-    'diffusers',
+  const packages = [
+    'diffusers[onnx]',
     'transformers',
-    'accelerate',
-    'safetensors'
+    'optimum[onnxruntime]',
+    'safetensors',
+    'numpy',
+    'Pillow',
+    'scipy'
   ];
   
-  await runPipInstall(otherPackages);
+  await runPipInstall(packages);
   log('[Deps] All dependencies installed successfully');
 }
 
-// Verify CUDA is available after installation
+// Verify ONNX Runtime GPU is available after installation
 async function verifyCudaAvailable() {
-  log('[CUDA] Verifying CUDA availability...');
+  log('[ONNX] Verifying ONNX Runtime GPU availability...');
   
   return new Promise((resolve) => {
     const checkScript = `
 import sys
 import json
 try:
-    import torch
+    import onnxruntime as ort
+    providers = ort.get_available_providers()
+    cuda_available = 'CUDAExecutionProvider' in providers
+    dml_available = 'DmlExecutionProvider' in providers
+    
     result = {
-        "torch_version": torch.__version__,
-        "cuda_available": torch.cuda.is_available(),
-        "cuda_version": torch.version.cuda if torch.cuda.is_available() else None,
-        "device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
-        "device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() and torch.cuda.device_count() > 0 else None,
-        "device_memory_gb": round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 1) if torch.cuda.is_available() and torch.cuda.device_count() > 0 else None
+        "onnx_version": ort.__version__,
+        "cuda_available": cuda_available,
+        "dml_available": dml_available,
+        "providers": providers,
+        "gpu_available": cuda_available or dml_available
     }
     print(json.dumps(result))
 except Exception as e:
-    print(json.dumps({"error": str(e), "cuda_available": False}))
+    print(json.dumps({"error": str(e), "cuda_available": False, "gpu_available": False}))
 `;
     
     const proc = spawn(PYTHON_EXE, ['-c', checkScript], {
@@ -2656,53 +2723,42 @@ except Exception as e:
       if (code === 0 && stdout.trim()) {
         try {
           const result = JSON.parse(stdout.trim());
-          log(`[CUDA] PyTorch version: ${result.torch_version}`);
-          log(`[CUDA] CUDA available: ${result.cuda_available}`);
-          if (result.cuda_available) {
-            log(`[CUDA] CUDA version: ${result.cuda_version}`);
-            log(`[CUDA] GPU: ${result.device_name} (${result.device_memory_gb}GB)`);
-          }
+          log(`[ONNX] ONNX Runtime version: ${result.onnx_version}`);
+          log(`[ONNX] CUDA provider available: ${result.cuda_available}`);
+          log(`[ONNX] DML provider available: ${result.dml_available}`);
+          log(`[ONNX] Available providers: ${result.providers?.join(', ')}`);
           resolve(result);
         } catch (e) {
-          log(`[CUDA] Failed to parse result: ${e.message}`);
-          log(`[CUDA] stdout: ${stdout}`);
-          resolve({ cuda_available: false, error: 'Parse error' });
+          log(`[ONNX] Failed to parse result: ${e.message}`);
+          log(`[ONNX] stdout: ${stdout}`);
+          resolve({ cuda_available: false, gpu_available: false, error: 'Parse error' });
         }
       } else {
-        log(`[CUDA] Check failed with code ${code}`);
-        log(`[CUDA] stderr: ${stderr}`);
-        resolve({ cuda_available: false, error: stderr || 'Check failed' });
+        log(`[ONNX] Check failed with code ${code}`);
+        log(`[ONNX] stderr: ${stderr}`);
+        resolve({ cuda_available: false, gpu_available: false, error: stderr || 'Check failed' });
       }
     });
     
     proc.on('error', (err) => {
-      log(`[CUDA] Process error: ${err.message}`);
-      resolve({ cuda_available: false, error: err.message });
+      log(`[ONNX] Process error: ${err.message}`);
+      resolve({ cuda_available: false, gpu_available: false, error: err.message });
     });
     
     // Timeout after 30 seconds
     setTimeout(() => {
       proc.kill();
-      resolve({ cuda_available: false, error: 'Timeout' });
+      resolve({ cuda_available: false, gpu_available: false, error: 'Timeout' });
     }, 30000);
   });
 }
 
 // Run benchmark image generation
 async function runBenchmark() {
-  log('[Benchmark] Starting benchmark...');
+  log('[Benchmark] Starting benchmark (ONNX Runtime)...');
   
   if (mainWindow) {
     mainWindow.webContents.send('image-ai-benchmark-start');
-  }
-  
-  // On Windows, ensure VC++ Redistributable is installed (required by PyTorch/fbgemm.dll)
-  if (process.platform === 'win32') {
-    log('[Benchmark] Checking VC++ Redistributable...');
-    const vcInstalled = await installVcRedist();
-    if (!vcInstalled && !isVcRedistInstalled()) {
-      log('[Benchmark] Warning: VC++ Redistributable may not be installed');
-    }
   }
   
   // Pre-check that all required components exist
@@ -2711,8 +2767,8 @@ async function runBenchmark() {
   const pythonPath = process.platform === 'win32'
     ? path.join(IMAGE_AI_DIR, 'python', 'python', 'python.exe')
     : path.join(IMAGE_AI_DIR, 'python', 'python', 'bin', 'python3');
-  // Use the same path where the model is downloaded
-  const modelPath = SD_MODEL_PATH;
+  // Use the ONNX model directory
+  const modelDir = SD_MODEL_DIR;
   
   if (!fs.existsSync(pythonPath)) {
     const errMsg = `Python not found at: ${pythonPath}`;
@@ -2724,35 +2780,13 @@ async function runBenchmark() {
   }
   log(`[Benchmark] Python found: ${pythonPath}`);
   
-  if (!fs.existsSync(modelPath)) {
-    const errMsg = `Model not found at: ${modelPath}`;
-    log(`[Benchmark] FAIL: ${errMsg}`);
-    if (mainWindow) {
-      mainWindow.webContents.send('image-ai-benchmark-error', errMsg);
-    }
-    return { success: false, error: errMsg };
-  }
-  
-  // Check model file size
-  try {
-    const stats = fs.statSync(modelPath);
-    const sizeGB = (stats.size / (1024 * 1024 * 1024)).toFixed(2);
-    log(`[Benchmark] Model found: ${modelPath} (${sizeGB}GB)`);
-    if (stats.size < 3000000000) {
-      const errMsg = `Model file too small (${sizeGB}GB) - download may be incomplete`;
-      log(`[Benchmark] FAIL: ${errMsg}`);
-      if (mainWindow) {
-        mainWindow.webContents.send('image-ai-benchmark-error', errMsg);
-      }
-      return { success: false, error: errMsg };
-    }
-  } catch (e) {
-    const errMsg = `Cannot read model file: ${e.message}`;
-    log(`[Benchmark] FAIL: ${errMsg}`);
-    if (mainWindow) {
-      mainWindow.webContents.send('image-ai-benchmark-error', errMsg);
-    }
-    return { success: false, error: errMsg };
+  // For ONNX, model directory may not exist yet - it will be downloaded on first use
+  // Just ensure the parent directory exists
+  if (!fs.existsSync(modelDir)) {
+    log(`[Benchmark] ONNX model not found, will be downloaded during benchmark`);
+    fs.mkdirSync(modelDir, { recursive: true });
+  } else {
+    log(`[Benchmark] ONNX model directory exists: ${modelDir}`);
   }
   
   const benchmarkPrompt = 'a simple red cube on a white background, minimal, clean';
@@ -2811,21 +2845,12 @@ async function runBenchmark() {
   }
 }
 
-// Generate image using SD
+// Generate image using ONNX Runtime
 async function generateImage(params) {
   const { prompt, seed, width, height, is_benchmark, tileX, tileY, totalTilesX, totalTilesY, tileOverlap } = params;
   
-  log(`[Generate] Starting: ${width}x${height}, seed=${seed}`);
+  log(`[Generate] Starting ONNX inference: ${width}x${height}, seed=${seed}`);
   log(`[Generate] Prompt: ${prompt.substring(0, 50)}...`);
-  
-  // On Windows, ensure VC++ Redistributable is installed (required by PyTorch/fbgemm.dll)
-  if (process.platform === 'win32' && !is_benchmark) {
-    // Skip if this is a benchmark call (benchmark already checks VC++)
-    if (!isVcRedistInstalled()) {
-      log('[Generate] VC++ Redistributable missing, attempting install...');
-      await installVcRedist();
-    }
-  }
   
   return new Promise((resolve, reject) => {
     // Get the inference script path - check multiple locations
@@ -2867,7 +2892,8 @@ async function generateImage(params) {
       seed: seed || 42,
       width: width || 512,
       height: height || 512,
-      model_path: SD_MODEL_PATH,
+      model_dir: SD_MODEL_DIR,
+      model_id: SD_ONNX_MODEL_ID,
       is_benchmark: is_benchmark || false,
       tile_x: tileX,
       tile_y: tileY,
@@ -3133,35 +3159,25 @@ ipcMain.handle('download-image-ai', async () => {
       }
       
       if (phase === 'model') {
-        log('[ImageAI] Phase: Downloading Stable Diffusion model...');
+        // For ONNX, the model is downloaded automatically by optimum/diffusers on first use
+        // We just need to ensure the directory exists
+        log('[ImageAI] Phase: Preparing ONNX model directory...');
         
-        // Send initial progress event before download starts
         if (mainWindow) {
           mainWindow.webContents.send('image-ai-progress', { phase: 'model', progress: 0 });
+          mainWindow.webContents.send('image-ai-deps-progress', 'ONNX model will be downloaded on first use...');
         }
         
-        await downloadFile(SD_MODEL_URL, SD_MODEL_PATH, (progress, downloaded, total) => {
-          if (mainWindow) {
-            mainWindow.webContents.send('image-ai-progress', { 
-              phase: 'model', 
-              progress,
-              downloaded,
-              total
-            });
-          }
-          if (progress % 10 === 0) {
-            log(`[ImageAI] Model download: ${progress}%`);
-          }
-        }, 'model');
-        
-        // Verify model size
-        const stats = fs.statSync(SD_MODEL_PATH);
-        if (stats.size < SD_MODEL_MIN_SIZE) {
-          fs.unlinkSync(SD_MODEL_PATH);
-          throw new Error(`Model file too small (${stats.size} bytes). Download may have failed.`);
+        // Create model directory if it doesn't exist
+        if (!fs.existsSync(SD_MODEL_DIR)) {
+          fs.mkdirSync(SD_MODEL_DIR, { recursive: true });
         }
         
-        log('[ImageAI] Model downloaded and verified');
+        if (mainWindow) {
+          mainWindow.webContents.send('image-ai-progress', { phase: 'model', progress: 100 });
+        }
+        
+        log('[ImageAI] ONNX model directory prepared - will download on first generation');
       }
       
       if (phase === 'benchmark') {

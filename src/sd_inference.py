@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Stable Diffusion inference script for ComputeGrid Worker
-This script is called by the Electron app to generate images.
+Stable Diffusion ONNX inference script for ComputeGrid Worker
+Uses ONNX Runtime instead of PyTorch for better Windows compatibility.
 """
 
 import sys
@@ -13,7 +13,7 @@ from io import BytesIO
 
 def log(message):
     """Log to stderr for the Electron app to capture"""
-    print(f"[SD] {message}", file=sys.stderr, flush=True)
+    print(f"[SD-ONNX] {message}", file=sys.stderr, flush=True)
 
 def main():
     if len(sys.argv) < 2:
@@ -21,79 +21,71 @@ def main():
         return 1
     
     try:
-        # Parse input from command line
         input_data = json.loads(sys.argv[1])
         
         prompt = input_data.get("prompt", "a beautiful landscape")
         seed = input_data.get("seed", 42)
         width = input_data.get("width", 512)
         height = input_data.get("height", 512)
-        model_path = input_data.get("model_path", "")
+        model_dir = input_data.get("model_dir", "")
+        model_id = input_data.get("model_id", "runwayml/stable-diffusion-v1-5")
         output_path = input_data.get("output_path", "")
         is_benchmark = input_data.get("is_benchmark", False)
         
-        log(f"Starting image generation: {width}x{height}, seed={seed}")
+        log(f"Starting ONNX image generation: {width}x{height}, seed={seed}")
         log(f"Prompt: {prompt[:50]}...")
         
         start_time = time.time()
         
-        # Import torch and diffusers here to measure load time
-        log("Loading PyTorch and diffusers...")
-        import torch
-        from diffusers import StableDiffusionPipeline, DPMSolverMultistepScheduler
+        log("Loading ONNX Runtime and dependencies...")
+        import numpy as np
+        import onnxruntime as ort
         
-        log(f"PyTorch version: {torch.__version__}")
-        log(f"CUDA available: {torch.cuda.is_available()}")
+        log(f"ONNX Runtime version: {ort.__version__}")
         
-        if torch.cuda.is_available():
-            device = "cuda"
-            dtype = torch.float16
-            log(f"Using CUDA device: {torch.cuda.get_device_name(0)}")
-            log(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f}GB")
+        providers = ort.get_available_providers()
+        log(f"Available providers: {providers}")
+        
+        use_cuda = 'CUDAExecutionProvider' in providers
+        use_dml = 'DmlExecutionProvider' in providers
+        
+        if use_cuda:
+            provider = 'CUDAExecutionProvider'
+            log("Using CUDA acceleration")
+        elif use_dml:
+            provider = 'DmlExecutionProvider'
+            log("Using DirectML acceleration (Windows)")
         else:
-            device = "cpu"
-            dtype = torch.float32
+            provider = 'CPUExecutionProvider'
             log("Using CPU (this will be slow)")
         
-        # Load the model
-        log("Loading Stable Diffusion model...")
+        log("Loading Stable Diffusion ONNX pipeline...")
         
-        if model_path and os.path.exists(model_path):
-            # Load from local safetensors file
-            log(f"Loading from local file: {model_path}")
-            pipe = StableDiffusionPipeline.from_single_file(
-                model_path,
-                torch_dtype=dtype,
-                use_safetensors=True
+        from diffusers import OnnxStableDiffusionPipeline
+        
+        if model_dir and os.path.exists(os.path.join(model_dir, "model_index.json")):
+            log(f"Loading from local ONNX model: {model_dir}")
+            pipe = OnnxStableDiffusionPipeline.from_pretrained(
+                model_dir,
+                provider=provider
             )
         else:
-            # Load from Hugging Face (fallback)
-            log("Loading from Hugging Face cache...")
-            pipe = StableDiffusionPipeline.from_pretrained(
+            log(f"Downloading pre-exported ONNX model from Hugging Face...")
+            pipe = OnnxStableDiffusionPipeline.from_pretrained(
                 "runwayml/stable-diffusion-v1-5",
-                torch_dtype=dtype
+                revision="onnx",
+                provider=provider
             )
-        
-        # Use faster scheduler
-        pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
-        pipe = pipe.to(device)
-        
-        # Enable memory optimizations
-        if device == "cuda":
-            pipe.enable_attention_slicing()
-            try:
-                pipe.enable_xformers_memory_efficient_attention()
-                log("xFormers enabled")
-            except Exception as e:
-                log(f"xFormers not available: {e}")
+            if model_dir:
+                log(f"Saving ONNX model to: {model_dir}")
+                os.makedirs(model_dir, exist_ok=True)
+                pipe.save_pretrained(model_dir)
         
         model_load_time = time.time() - start_time
         log(f"Model loaded in {model_load_time:.1f}s")
         
-        # Set random seed for reproducibility
-        generator = torch.Generator(device=device).manual_seed(seed)
+        np.random.seed(seed)
         
-        # Generate the image
         log("Generating image...")
         gen_start = time.time()
         
@@ -105,7 +97,6 @@ def main():
             height=height,
             num_inference_steps=num_steps,
             guidance_scale=7.5,
-            generator=generator
         )
         
         image = result.images[0]
@@ -114,17 +105,14 @@ def main():
         
         log(f"Image generated in {gen_time:.1f}s (total: {total_time:.1f}s)")
         
-        # Convert image to base64
         buffer = BytesIO()
         image.save(buffer, format="PNG")
         image_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
         
-        # Save to file if output path specified
         if output_path:
             image.save(output_path, format="PNG")
             log(f"Image saved to: {output_path}")
         
-        # Return result as JSON
         result = {
             "success": True,
             "image_base64": image_base64,
@@ -134,7 +122,7 @@ def main():
             "model_load_time_ms": int(model_load_time * 1000),
             "generation_time_ms": int(gen_time * 1000),
             "total_time_ms": int(total_time * 1000),
-            "device": device
+            "provider": provider
         }
         
         print(json.dumps(result))
@@ -144,7 +132,7 @@ def main():
         log(f"Import error: {e}")
         print(json.dumps({
             "success": False,
-            "error": f"Missing dependency: {e}",
+            "error": f"Missing dependency: {e}. Try reinstalling Image AI.",
             "error_type": "import_error"
         }))
         return 1
@@ -154,8 +142,7 @@ def main():
         error_type = "general"
         error_msg = error_str
         
-        # Check for CUDA OOM
-        if "CUDA out of memory" in error_str or "OutOfMemoryError" in type(e).__name__:
+        if "out of memory" in error_str.lower() or "OutOfMemoryError" in type(e).__name__:
             error_type = "oom"
             error_msg = "GPU out of memory - try smaller image size"
         
