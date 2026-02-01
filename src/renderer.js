@@ -75,6 +75,7 @@ const deleteImageAiFilesBtn = document.getElementById('deleteImageAiFilesBtn');
 const deleteImageAiStatus = document.getElementById('deleteImageAiStatus');
 const imageBenchmarkStatus = document.getElementById('imageBenchmarkStatus');
 const benchmarkResult = document.getElementById('benchmarkResult');
+const retryBenchmarkBtn = document.getElementById('retryBenchmarkBtn');
 
 // DOM Elements - Image AI Warning Modal
 const imageAiWarningModal = document.getElementById('imageAiWarningModal');
@@ -548,8 +549,12 @@ function updateImageAiUI(status) {
     imageBenchmarkStatus.style.display = imageAiInstalled ? 'flex' : 'none';
   }
   
-  // Update benchmark result
+  // Update benchmark result and retry button
   if (benchmarkResult && imageAiInstalled) {
+    // Show retry button if: no benchmark time OR tier is banned (benchmark failed or too slow)
+    const benchmarkOk = imageBenchmarkTimeMs && imageQualityTier && imageQualityTier !== 'banned';
+    const showRetryBtn = !benchmarkOk;
+    
     if (imageBenchmarkTimeMs) {
       const seconds = (imageBenchmarkTimeMs / 1000).toFixed(1);
       let tierText = '';
@@ -566,7 +571,19 @@ function updateImageAiUI(status) {
       }
       benchmarkResult.textContent = `${seconds}s - ${tierText}`;
     } else {
-      benchmarkResult.textContent = 'Benchmark will run after first image task';
+      // No benchmark result
+      if (imageQualityTier === 'banned') {
+        benchmarkResult.textContent = 'Benchmark failed - Using fallback tier';
+      } else if (imageQualityTier) {
+        benchmarkResult.textContent = `Using fallback: ${imageQualityTier} tier`;
+      } else {
+        benchmarkResult.textContent = 'Benchmark not run yet';
+      }
+    }
+    
+    // Show/hide retry button
+    if (retryBenchmarkBtn) {
+      retryBenchmarkBtn.style.display = showRetryBtn ? 'block' : 'none';
     }
   }
   
@@ -784,6 +801,46 @@ if (resumeImageAiBtn) {
       if (imageAiDownloadStatus) {
         imageAiDownloadStatus.textContent = `Error: ${result.error}`;
       }
+    }
+  });
+}
+
+// Retry Benchmark button
+if (retryBenchmarkBtn) {
+  retryBenchmarkBtn.addEventListener('click', async () => {
+    console.log('[Renderer] Retry benchmark requested');
+    
+    // Disable button and show loading state
+    retryBenchmarkBtn.disabled = true;
+    retryBenchmarkBtn.textContent = 'Running...';
+    
+    if (benchmarkResult) {
+      benchmarkResult.textContent = 'Running benchmark...';
+    }
+    
+    try {
+      const result = await window.electronAPI.retryImageBenchmark();
+      console.log('[Renderer] Benchmark result:', result);
+      
+      if (result.success) {
+        // Success - UI will update via status change
+        retryBenchmarkBtn.textContent = 'Retry';
+        retryBenchmarkBtn.style.display = 'none';
+      } else {
+        // Failed - show error and keep retry button visible
+        retryBenchmarkBtn.textContent = 'Retry';
+        if (benchmarkResult) {
+          benchmarkResult.textContent = `Error: ${result.error}`;
+        }
+      }
+    } catch (err) {
+      console.error('[Renderer] Benchmark retry failed:', err);
+      retryBenchmarkBtn.textContent = 'Retry';
+      if (benchmarkResult) {
+        benchmarkResult.textContent = `Error: ${err.message}`;
+      }
+    } finally {
+      retryBenchmarkBtn.disabled = false;
     }
   });
 }

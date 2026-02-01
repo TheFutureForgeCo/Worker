@@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   uninstallImageAi: () => ipcRenderer.invoke('uninstall-image-ai'),
   deleteImageAiFiles: () => ipcRenderer.invoke('delete-image-ai-files'),
   reportBenchmark: (benchmarkTimeMs) => ipcRenderer.invoke('report-benchmark', benchmarkTimeMs),
+  retryImageBenchmark: () => ipcRenderer.invoke('retry-image-benchmark'),
   generateImage: (params) => ipcRenderer.invoke('generate-image', params),
   
   // Event listeners

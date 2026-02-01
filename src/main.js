@@ -2074,6 +2074,58 @@ ipcMain.handle('report-benchmark', async (event, benchmarkTimeMs) => {
   return await reportBenchmarkResult(benchmarkTimeMs);
 });
 
+// Retry benchmark manually from UI
+ipcMain.handle('retry-image-benchmark', async () => {
+  log('[ImageAI] Manual benchmark retry requested from UI');
+  
+  // Check if Image AI is ready
+  if (!isImageAiFullyReady()) {
+    log('[ImageAI] Cannot retry benchmark - Image AI not fully ready');
+    return { success: false, error: 'Image AI is not fully installed' };
+  }
+  
+  // Notify UI that benchmark is starting
+  if (mainWindow) {
+    mainWindow.webContents.send('image-ai-phase', 'benchmark');
+    mainWindow.webContents.send('image-ai-benchmark-start');
+  }
+  
+  try {
+    const benchResult = await runBenchmark();
+    
+    if (benchResult.success) {
+      log(`[ImageAI] Manual benchmark completed: ${benchResult.time}ms, tier=${benchResult.tier}`);
+      // Report to server - this also sets config.imageBenchmarkTimeMs and imageQualityTier
+      await reportBenchmarkResult(benchResult.time);
+      sendStatusToRenderer();
+      return { success: true, time: benchResult.time, tier: config.imageQualityTier };
+    } else {
+      const errorMsg = benchResult.error || 'Unknown benchmark error';
+      log(`[ImageAI] Manual benchmark failed: ${errorMsg}`);
+      
+      // Set fallback tier based on GPU VRAM
+      const vramGb = config.gpuVramGb || 0;
+      if (vramGb >= 8) {
+        config.imageQualityTier = 'medium';
+      } else if (vramGb >= 6) {
+        config.imageQualityTier = 'slow';
+      } else {
+        config.imageQualityTier = 'banned';
+      }
+      config.imageBenchmarkTimeMs = null;
+      saveConfig();
+      
+      log(`[ImageAI] Using fallback tier: ${config.imageQualityTier} (based on ${vramGb}GB VRAM)`);
+      sendStatusToRenderer();
+      return { success: false, error: errorMsg, tier: config.imageQualityTier };
+    }
+  } catch (err) {
+    log(`[ImageAI] Manual benchmark error: ${err.message}`);
+    sendStatusToRenderer();
+    return { success: false, error: err.message || 'Benchmark failed unexpectedly' };
+  }
+});
+
 // Download file with progress, proper redirects, and status checking
 function downloadFile(url, destPath, onProgress, phaseForProgress = null) {
   return new Promise((resolve, reject) => {
