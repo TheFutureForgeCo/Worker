@@ -2696,6 +2696,15 @@ async function runBenchmark() {
     mainWindow.webContents.send('image-ai-benchmark-start');
   }
   
+  // On Windows, ensure VC++ Redistributable is installed (required by PyTorch/fbgemm.dll)
+  if (process.platform === 'win32') {
+    log('[Benchmark] Checking VC++ Redistributable...');
+    const vcInstalled = await installVcRedist();
+    if (!vcInstalled && !isVcRedistInstalled()) {
+      log('[Benchmark] Warning: VC++ Redistributable may not be installed');
+    }
+  }
+  
   // Pre-check that all required components exist
   log('[Benchmark] Pre-check: Verifying Image AI components...');
   
@@ -2808,6 +2817,15 @@ async function generateImage(params) {
   
   log(`[Generate] Starting: ${width}x${height}, seed=${seed}`);
   log(`[Generate] Prompt: ${prompt.substring(0, 50)}...`);
+  
+  // On Windows, ensure VC++ Redistributable is installed (required by PyTorch/fbgemm.dll)
+  if (process.platform === 'win32' && !is_benchmark) {
+    // Skip if this is a benchmark call (benchmark already checks VC++)
+    if (!isVcRedistInstalled()) {
+      log('[Generate] VC++ Redistributable missing, attempting install...');
+      await installVcRedist();
+    }
+  }
   
   return new Promise((resolve, reject) => {
     // Get the inference script path - check multiple locations
