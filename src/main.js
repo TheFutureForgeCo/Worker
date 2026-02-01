@@ -61,7 +61,7 @@ try {
   } catch (e2) {
     earlyLog(`Failed to load version from app path: ${e2.message}`);
     // Method 3: Hardcode fallback
-    APP_VERSION = '1.5.17';
+    APP_VERSION = '1.5.18';
   }
 }
 earlyLog(`App version: ${APP_VERSION}`);
@@ -1402,6 +1402,19 @@ async function startWorker() {
     
     isOnline = true;
     
+    // Check if Image AI needs benchmark before starting worker
+    // This ensures worker has the correct imageQualityTier for claiming image tasks
+    if (config.imageAiEnabled && isImageAiFullyReady()) {
+      if (!config.imageBenchmarkTimeMs || !config.imageQualityTier || config.imageQualityTier === 'none') {
+        log('[ImageAI] Running benchmark before worker starts...');
+        try {
+          await checkAndRunBenchmarkIfNeeded();
+        } catch (err) {
+          log(`[ImageAI] Pre-worker benchmark failed: ${err.message}`);
+        }
+      }
+    }
+    
     // Start the worker process with integrity info
     earlyLog('About to start worker process');
     log('Starting worker process...');
@@ -1940,14 +1953,14 @@ async function checkAndRunBenchmarkIfNeeded() {
   } else {
     log(`[ImageAI] Auto-benchmark failed: ${benchResult.error}`);
     
-    // Set a fallback tier based on GPU VRAM
+    // Set a fallback tier based on GPU VRAM (consistent with download handler)
     const vramGb = config.gpuVramGb || 0;
     if (vramGb >= 8) {
-      config.imageQualityTier = 'medium';
+      config.imageQualityTier = 'medium'; // Allow up to 512px
     } else if (vramGb >= 6) {
-      config.imageQualityTier = 'slow';
+      config.imageQualityTier = 'slow'; // 256px only
     } else {
-      config.imageQualityTier = 'slow'; // Default to slow rather than banned
+      config.imageQualityTier = 'banned'; // Not enough VRAM - don't claim image tasks
     }
     config.imageBenchmarkTimeMs = null;
     saveConfig();
