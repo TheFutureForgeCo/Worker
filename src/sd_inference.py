@@ -72,8 +72,8 @@ def main():
         else:
             log(f"Downloading pre-exported ONNX model from Hugging Face...")
             pipe = OnnxStableDiffusionPipeline.from_pretrained(
-                "runwayml/stable-diffusion-v1-5",
-                revision="onnx",
+                "tlwu/stable-diffusion-v1-5",
+                revision="fp16",
                 provider=provider
             )
             if model_dir:
