@@ -496,8 +496,17 @@ function loadConfig() {
       config.imageAiInstalled = false;
       saveConfig();
     } else if (!config.imageAiInstalled && fullyInstalled) {
-      log('Image AI fully installed, updating config');
+      log('Image AI fully installed, updating config and enabling');
       config.imageAiInstalled = true;
+      config.imageAiEnabled = true; // Enable so benchmark can run
+      saveConfig();
+    }
+    
+    // Also ensure imageAiEnabled is true if Image AI is fully installed
+    // This fixes cases where config.imageAiEnabled was false after restart
+    if (fullyInstalled && !config.imageAiEnabled) {
+      log('Image AI installed but not enabled, enabling now');
+      config.imageAiEnabled = true;
       saveConfig();
     }
   } catch (err) {
@@ -1920,10 +1929,11 @@ function isImageAiFullyReady() {
 // Check and auto-run benchmark if Image AI is ready but no benchmark exists
 async function checkAndRunBenchmarkIfNeeded() {
   log('[ImageAI] Checking if benchmark is needed...');
+  log(`[ImageAI] Config state: enabled=${config.imageAiEnabled}, installed=${config.imageAiInstalled}, tier=${config.imageQualityTier}, benchmarkMs=${config.imageBenchmarkTimeMs}`);
   
   // Only check if image AI is enabled
   if (!config.imageAiEnabled) {
-    log('[ImageAI] Image AI not enabled, skipping benchmark check');
+    log('[ImageAI] Image AI not enabled (imageAiEnabled=false), skipping benchmark check');
     return;
   }
   
@@ -3003,10 +3013,12 @@ ipcMain.handle('download-image-ai', async () => {
       }
     }
     
-    // Mark as installed
+    // Mark as installed and enabled
     config.imageAiInstalled = true;
+    config.imageAiEnabled = true; // Enable for benchmark checking
     saveConfig();
     sendStatusToRenderer();
+    log('[ImageAI] Marked as installed and enabled');
     
     currentDownloadPhase = 'idle';
     imageAiDownloadController = null;
