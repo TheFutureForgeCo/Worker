@@ -508,19 +508,38 @@ async function setupOllama() {
   }
 }
 
-// Generate AI response using Ollama
-async function generateWithOllama(prompt, systemPrompt = '') {
+// Generate AI response using Ollama with conversation history
+async function generateWithOllama(prompt, systemPrompt = '', conversationHistory = []) {
   if (!ollamaReady) {
     return simulateResponse(prompt);
   }
 
   try {
-    const response = await makeRequest(`${OLLAMA_HOST}/api/generate`, {
+    // Build messages array for chat endpoint
+    const messages = [];
+    
+    // Add system prompt if provided
+    if (systemPrompt) {
+      messages.push({ role: 'system', content: systemPrompt });
+    }
+    
+    // Add conversation history (already in {role, content} format)
+    if (Array.isArray(conversationHistory) && conversationHistory.length > 0) {
+      messages.push(...conversationHistory);
+    }
+    
+    // Add current user message
+    messages.push({ role: 'user', content: prompt });
+    
+    log(`Sending chat request with ${messages.length} messages (${conversationHistory.length} history)`);
+    
+    // Use /api/chat endpoint for conversation context
+    const response = await makeRequest(`${OLLAMA_HOST}/api/chat`, {
       method: 'POST',
       timeout: 120000,
       body: {
         model: activeModel,
-        prompt: systemPrompt ? `${systemPrompt}\n\nUser: ${prompt}` : prompt,
+        messages: messages,
         stream: false,
         options: {
           temperature: 0.7,
@@ -530,11 +549,12 @@ async function generateWithOllama(prompt, systemPrompt = '') {
       }
     });
 
-    if (response.status === 200 && response.data && response.data.response) {
-      return response.data.response;
+    // /api/chat returns response in message.content
+    if (response.status === 200 && response.data && response.data.message && response.data.message.content) {
+      return response.data.message.content;
     }
   } catch (err) {
-    log(`Ollama generation error: ${err.message}`);
+    log(`Ollama chat error: ${err.message}`);
   }
 
   return simulateResponse(prompt);
@@ -940,8 +960,9 @@ async function processTask(task) {
     else if (task.taskType === 'chat' || task.taskType === 'inference') {
       const prompt = taskData.userMessage || taskData.prompt || taskData.message || 'Hello';
       const systemPrompt = taskData.systemPrompt || '';
+      const conversationHistory = taskData.conversationHistory || [];
       
-      result = await generateWithOllama(prompt, systemPrompt);
+      result = await generateWithOllama(prompt, systemPrompt, conversationHistory);
       tokens = result.split(/\s+/).length * 1.3; // Rough token estimate
     } else {
       // Generic task processing

@@ -2194,68 +2194,194 @@ async function extractTarGz(archivePath, destDir) {
 async function installPythonDeps() {
   log('[Deps] Installing Python dependencies...');
   
-  return new Promise((resolve, reject) => {
-    // Check if Python exists first
-    if (!fs.existsSync(PYTHON_EXE)) {
-      log(`[Deps] Python not found at ${PYTHON_EXE}`);
-      reject(new Error('Python not found'));
-      return;
-    }
-    
-    // Install core dependencies
-    const packages = [
-      'torch',
-      'torchvision', 
-      'diffusers',
-      'transformers',
-      'accelerate',
-      'safetensors',
-      'xformers'
-    ];
-    
-    log(`[Deps] Installing: ${packages.join(', ')}`);
-    log(`[Deps] Using Python at: ${PYTHON_EXE}`);
-    
-    // Use python -m pip instead of calling pip directly - more reliable cross-platform
-    const proc = spawn(PYTHON_EXE, ['-m', 'pip', 'install', '--no-cache-dir', ...packages], {
-      env: { ...process.env, PIP_DISABLE_PIP_VERSION_CHECK: '1' }
-    });
-    
-    let output = '';
-    
-    proc.stdout.on('data', (data) => {
-      output += data.toString();
-      // Log progress
-      const lines = data.toString().split('\n');
-      for (const line of lines) {
-        if (line.includes('Collecting') || line.includes('Installing') || line.includes('Successfully')) {
-          log(`[Deps] ${line.trim()}`);
-          if (mainWindow) {
-            mainWindow.webContents.send('image-ai-deps-progress', line.trim());
+  // Check if Python exists first
+  if (!fs.existsSync(PYTHON_EXE)) {
+    log(`[Deps] Python not found at ${PYTHON_EXE}`);
+    throw new Error('Python not found');
+  }
+  
+  log(`[Deps] Using Python at: ${PYTHON_EXE}`);
+  
+  // Helper function to run pip install
+  const runPipInstall = (packages, extraArgs = []) => {
+    return new Promise((resolve, reject) => {
+      const args = ['-m', 'pip', 'install', '--no-cache-dir', ...extraArgs, ...packages];
+      log(`[Deps] Running: python ${args.join(' ')}`);
+      
+      const proc = spawn(PYTHON_EXE, args, {
+        env: { ...process.env, PIP_DISABLE_PIP_VERSION_CHECK: '1' }
+      });
+      
+      let output = '';
+      
+      proc.stdout.on('data', (data) => {
+        output += data.toString();
+        const lines = data.toString().split('\n');
+        for (const line of lines) {
+          if (line.includes('Collecting') || line.includes('Installing') || line.includes('Successfully') || line.includes('Downloading')) {
+            log(`[Deps] ${line.trim()}`);
+            if (mainWindow) {
+              mainWindow.webContents.send('image-ai-deps-progress', line.trim());
+            }
           }
         }
-      }
+      });
+      
+      proc.stderr.on('data', (data) => {
+        output += data.toString();
+        const lines = data.toString().split('\n');
+        for (const line of lines) {
+          if (line.trim() && !line.includes('WARNING')) {
+            log(`[Deps] ${line.trim()}`);
+          }
+        }
+      });
+      
+      proc.on('close', (code) => {
+        if (code === 0) {
+          resolve(output);
+        } else {
+          log(`[Deps] pip install failed with code ${code}`);
+          log(`[Deps] Last output: ${output.slice(-2000)}`);
+          reject(new Error(`pip install failed with code ${code}`));
+        }
+      });
+      
+      proc.on('error', (err) => {
+        log(`[Deps] Process error: ${err.message}`);
+        reject(err);
+      });
+    });
+  };
+  
+  // Step 1: Install PyTorch with CUDA support from PyTorch's index
+  // Using CUDA 12.1 which is compatible with most modern NVIDIA drivers
+  log('[Deps] Step 1/3: Installing PyTorch with CUDA 12.1 support...');
+  if (mainWindow) {
+    mainWindow.webContents.send('image-ai-deps-progress', 'Installing PyTorch with CUDA support (this is a large download)...');
+  }
+  
+  try {
+    await runPipInstall(
+      ['torch', 'torchvision'],
+      ['--index-url', 'https://download.pytorch.org/whl/cu121']
+    );
+    log('[Deps] PyTorch with CUDA installed successfully');
+  } catch (err) {
+    // If CUDA 12.1 fails, try CUDA 11.8 for older drivers
+    log('[Deps] CUDA 12.1 failed, trying CUDA 11.8...');
+    if (mainWindow) {
+      mainWindow.webContents.send('image-ai-deps-progress', 'Trying PyTorch with CUDA 11.8...');
+    }
+    await runPipInstall(
+      ['torch', 'torchvision'],
+      ['--index-url', 'https://download.pytorch.org/whl/cu118']
+    );
+    log('[Deps] PyTorch with CUDA 11.8 installed successfully');
+  }
+  
+  // Step 2: Install xformers for memory-efficient attention (optional but recommended)
+  log('[Deps] Step 2/3: Installing xformers...');
+  if (mainWindow) {
+    mainWindow.webContents.send('image-ai-deps-progress', 'Installing xformers for better performance...');
+  }
+  
+  try {
+    await runPipInstall(['xformers'], ['--index-url', 'https://download.pytorch.org/whl/cu121']);
+    log('[Deps] xformers installed successfully');
+  } catch (err) {
+    // xformers is optional, continue if it fails
+    log('[Deps] xformers installation failed (optional, continuing): ' + err.message);
+  }
+  
+  // Step 3: Install other dependencies from PyPI
+  log('[Deps] Step 3/3: Installing diffusers and other dependencies...');
+  if (mainWindow) {
+    mainWindow.webContents.send('image-ai-deps-progress', 'Installing diffusers and dependencies...');
+  }
+  
+  const otherPackages = [
+    'diffusers',
+    'transformers',
+    'accelerate',
+    'safetensors'
+  ];
+  
+  await runPipInstall(otherPackages);
+  log('[Deps] All dependencies installed successfully');
+}
+
+// Verify CUDA is available after installation
+async function verifyCudaAvailable() {
+  log('[CUDA] Verifying CUDA availability...');
+  
+  return new Promise((resolve) => {
+    const checkScript = `
+import sys
+import json
+try:
+    import torch
+    result = {
+        "torch_version": torch.__version__,
+        "cuda_available": torch.cuda.is_available(),
+        "cuda_version": torch.version.cuda if torch.cuda.is_available() else None,
+        "device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
+        "device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() and torch.cuda.device_count() > 0 else None,
+        "device_memory_gb": round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 1) if torch.cuda.is_available() and torch.cuda.device_count() > 0 else None
+    }
+    print(json.dumps(result))
+except Exception as e:
+    print(json.dumps({"error": str(e), "cuda_available": False}))
+`;
+    
+    const proc = spawn(PYTHON_EXE, ['-c', checkScript], {
+      env: process.env
+    });
+    
+    let stdout = '';
+    let stderr = '';
+    
+    proc.stdout.on('data', (data) => {
+      stdout += data.toString();
     });
     
     proc.stderr.on('data', (data) => {
-      output += data.toString();
+      stderr += data.toString();
     });
     
     proc.on('close', (code) => {
-      if (code === 0) {
-        log('[Deps] Installation complete');
-        resolve();
+      if (code === 0 && stdout.trim()) {
+        try {
+          const result = JSON.parse(stdout.trim());
+          log(`[CUDA] PyTorch version: ${result.torch_version}`);
+          log(`[CUDA] CUDA available: ${result.cuda_available}`);
+          if (result.cuda_available) {
+            log(`[CUDA] CUDA version: ${result.cuda_version}`);
+            log(`[CUDA] GPU: ${result.device_name} (${result.device_memory_gb}GB)`);
+          }
+          resolve(result);
+        } catch (e) {
+          log(`[CUDA] Failed to parse result: ${e.message}`);
+          log(`[CUDA] stdout: ${stdout}`);
+          resolve({ cuda_available: false, error: 'Parse error' });
+        }
       } else {
-        log(`[Deps] Installation failed with code ${code}`);
-        log(`[Deps] Output: ${output.slice(-1000)}`);
-        reject(new Error(`pip install failed with code ${code}`));
+        log(`[CUDA] Check failed with code ${code}`);
+        log(`[CUDA] stderr: ${stderr}`);
+        resolve({ cuda_available: false, error: stderr || 'Check failed' });
       }
     });
     
     proc.on('error', (err) => {
-      log(`[Deps] Process error: ${err.message}`);
-      reject(err);
+      log(`[CUDA] Process error: ${err.message}`);
+      resolve({ cuda_available: false, error: err.message });
     });
+    
+    // Timeout after 30 seconds
+    setTimeout(() => {
+      proc.kill();
+      resolve({ cuda_available: false, error: 'Timeout' });
+    }, 30000);
   });
 }
 
@@ -2545,12 +2671,15 @@ ipcMain.handle('download-image-ai', async () => {
       phases.push('deps');
     }
     
-    // Phase 3: Download model if needed
+    // Phase 3: Verify CUDA is working (always run after deps to confirm installation worked)
+    phases.push('cuda_check');
+    
+    // Phase 4: Download model if needed
     if (!isModelReady()) {
       phases.push('model');
     }
     
-    // Phase 4: Always run benchmark after setup
+    // Phase 5: Always run benchmark after setup
     phases.push('benchmark');
     
     log(`[ImageAI] Phases to run: ${phases.join(', ')}`);
@@ -2648,6 +2777,38 @@ ipcMain.handle('download-image-ai', async () => {
         // Mark deps as installed
         fs.writeFileSync(path.join(PYTHON_DIR, '.deps-installed'), new Date().toISOString());
         log('[ImageAI] Dependencies installed');
+      }
+      
+      if (phase === 'cuda_check') {
+        log('[ImageAI] Phase: Verifying CUDA installation...');
+        if (mainWindow) {
+          mainWindow.webContents.send('image-ai-progress', { phase: 'cuda_check', progress: 0 });
+          mainWindow.webContents.send('image-ai-deps-progress', 'Verifying CUDA/GPU availability...');
+        }
+        
+        const cudaResult = await verifyCudaAvailable();
+        
+        if (mainWindow) {
+          mainWindow.webContents.send('image-ai-progress', { phase: 'cuda_check', progress: 100 });
+        }
+        
+        if (cudaResult.cuda_available) {
+          log(`[ImageAI] CUDA is available: ${cudaResult.device_name} (${cudaResult.device_memory_gb}GB)`);
+          if (mainWindow) {
+            mainWindow.webContents.send('image-ai-deps-progress', `GPU detected: ${cudaResult.device_name}`);
+          }
+          // Store GPU info in config
+          config.gpuName = cudaResult.device_name;
+          config.gpuVramGb = cudaResult.device_memory_gb;
+          config.cudaVersion = cudaResult.cuda_version;
+          saveConfig();
+        } else {
+          log(`[ImageAI] WARNING: CUDA is NOT available. Error: ${cudaResult.error || 'Unknown'}`);
+          log('[ImageAI] Image generation will fall back to CPU (very slow) or may not work');
+          if (mainWindow) {
+            mainWindow.webContents.send('image-ai-deps-progress', 'Warning: CUDA not available, GPU acceleration disabled');
+          }
+        }
       }
       
       if (phase === 'model') {
