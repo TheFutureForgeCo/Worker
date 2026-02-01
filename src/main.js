@@ -2354,6 +2354,139 @@ async function extractTarGz(archivePath, destDir) {
   });
 }
 
+// Check if Visual C++ Redistributable is installed (required by PyTorch on Windows)
+function isVcRedistInstalled() {
+  if (process.platform !== 'win32') return true; // Only needed on Windows
+  
+  // Check for vcruntime140.dll in System32 - this is the main VC++ runtime DLL
+  const system32Path = process.env.SYSTEMROOT ? path.join(process.env.SYSTEMROOT, 'System32') : 'C:\\Windows\\System32';
+  const vcRuntimeDll = path.join(system32Path, 'vcruntime140.dll');
+  const vcRuntime2Dll = path.join(system32Path, 'vcruntime140_1.dll');
+  
+  const installed = fs.existsSync(vcRuntimeDll) && fs.existsSync(vcRuntime2Dll);
+  log(`[VCRedist] Check: vcruntime140.dll=${fs.existsSync(vcRuntimeDll)}, vcruntime140_1.dll=${fs.existsSync(vcRuntime2Dll)}`);
+  return installed;
+}
+
+// Download and install Visual C++ Redistributable 2015-2022 (required by PyTorch/fbgemm.dll)
+async function installVcRedist() {
+  if (process.platform !== 'win32') {
+    log('[VCRedist] Not Windows, skipping VC++ Redistributable installation');
+    return true;
+  }
+  
+  if (isVcRedistInstalled()) {
+    log('[VCRedist] Visual C++ Redistributable is already installed');
+    return true;
+  }
+  
+  log('[VCRedist] Installing Visual C++ Redistributable 2015-2022...');
+  
+  if (mainWindow) {
+    mainWindow.webContents.send('image-ai-deps-progress', 'Installing Visual C++ Redistributable (required for PyTorch)...');
+  }
+  
+  // Download URL for VC++ Redistributable 2015-2022 (x64)
+  const vcRedistUrl = 'https://aka.ms/vs/17/release/vc_redist.x64.exe';
+  const vcRedistPath = path.join(IMAGE_AI_DIR, 'vc_redist.x64.exe');
+  
+  try {
+    // Download the installer
+    log('[VCRedist] Downloading from: ' + vcRedistUrl);
+    
+    await new Promise((resolve, reject) => {
+      const file = fs.createWriteStream(vcRedistPath);
+      
+      const makeRequest = (url) => {
+        const protocol = url.startsWith('https') ? https : http;
+        protocol.get(url, { 
+          headers: { 'User-Agent': 'ComputeGrid-Worker' },
+          timeout: 60000
+        }, (response) => {
+          // Handle redirects
+          if (response.statusCode === 301 || response.statusCode === 302 || response.statusCode === 307 || response.statusCode === 308) {
+            const redirectUrl = response.headers.location;
+            log('[VCRedist] Redirecting to: ' + redirectUrl);
+            makeRequest(redirectUrl);
+            return;
+          }
+          
+          if (response.statusCode !== 200) {
+            reject(new Error(`Download failed with status: ${response.statusCode}`));
+            return;
+          }
+          
+          response.pipe(file);
+          file.on('finish', () => {
+            file.close();
+            resolve();
+          });
+        }).on('error', reject);
+      };
+      
+      makeRequest(vcRedistUrl);
+    });
+    
+    log('[VCRedist] Downloaded successfully');
+    
+    // Run the installer silently
+    log('[VCRedist] Running silent install...');
+    
+    await new Promise((resolve, reject) => {
+      // /install /quiet /norestart - silent installation
+      const proc = spawn(vcRedistPath, ['/install', '/quiet', '/norestart'], {
+        windowsHide: true
+      });
+      
+      proc.on('close', (code) => {
+        log(`[VCRedist] Installer exited with code: ${code}`);
+        // Code 0 = success, code 1638 = already installed, code 3010 = success but needs reboot
+        if (code === 0 || code === 1638 || code === 3010) {
+          resolve();
+        } else {
+          reject(new Error(`VC++ Redistributable installation failed with code: ${code}`));
+        }
+      });
+      
+      proc.on('error', (err) => {
+        log(`[VCRedist] Installer error: ${err.message}`);
+        reject(err);
+      });
+    });
+    
+    // Clean up installer
+    try {
+      fs.unlinkSync(vcRedistPath);
+    } catch (e) {
+      log('[VCRedist] Could not delete installer: ' + e.message);
+    }
+    
+    log('[VCRedist] Visual C++ Redistributable installed successfully');
+    
+    if (mainWindow) {
+      mainWindow.webContents.send('image-ai-deps-progress', 'Visual C++ Redistributable installed');
+    }
+    
+    return true;
+  } catch (err) {
+    log('[VCRedist] Installation failed: ' + err.message);
+    
+    // Clean up on failure
+    try {
+      if (fs.existsSync(vcRedistPath)) {
+        fs.unlinkSync(vcRedistPath);
+      }
+    } catch (e) {}
+    
+    // Don't throw - let PyTorch installation try anyway (it might work if already partially installed)
+    if (mainWindow) {
+      mainWindow.webContents.send('image-ai-deps-progress', 'Warning: VC++ Redistributable installation may have failed');
+    }
+    
+    return false;
+  }
+}
+
 // Install Python dependencies (diffusers, torch, etc.)
 async function installPythonDeps() {
   log('[Deps] Installing Python dependencies...');
@@ -2417,6 +2550,12 @@ async function installPythonDeps() {
       });
     });
   };
+  
+  // Step 0: On Windows, ensure Visual C++ Redistributable is installed (required by PyTorch/fbgemm.dll)
+  if (process.platform === 'win32') {
+    log('[Deps] Step 0: Checking Visual C++ Redistributable...');
+    await installVcRedist();
+  }
   
   // Step 1: Install PyTorch with CUDA support from PyTorch's index
   // Using CUDA 12.1 which is compatible with most modern NVIDIA drivers
