@@ -72,7 +72,7 @@ def main():
         else:
             log(f"Downloading pre-exported ONNX model from Hugging Face...")
             pipe = ORTStableDiffusionPipeline.from_pretrained(
-                "OnnxStack/stable-diffusion-v1-5-onnx",
+                "modularai/stable-diffusion-1.5-onnx",
                 provider=provider
             )
             if model_dir:
