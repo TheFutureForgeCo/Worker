@@ -2654,15 +2654,24 @@ async function installPythonDeps() {
     });
   };
   
-  // Step 1: Install diffusers with ONNX support and other dependencies
-  log('[Deps] Step 1/2: Installing diffusers and dependencies...');
+  // Step 1: Install PyTorch with CUDA support (requires special wheel index)
+  log('[Deps] Step 1/3: Installing PyTorch with CUDA support...');
+  if (mainWindow) {
+    mainWindow.webContents.send('image-ai-deps-progress', 'Installing PyTorch with CUDA support...');
+  }
+  
+  // PyTorch must be installed from the special wheel index to get CUDA support
+  // Regular pip install torch only gets CPU version on Windows
+  await runPipInstall(['torch'], ['--index-url', 'https://download.pytorch.org/whl/cu118']);
+  
+  // Step 2: Install other dependencies
+  log('[Deps] Step 2/3: Installing diffusers and dependencies...');
   if (mainWindow) {
     mainWindow.webContents.send('image-ai-deps-progress', 'Installing diffusers and dependencies...');
   }
   
-  // Install base packages first (without optimum to control ONNX version)
+  // Install other packages (without torch since we installed it above)
   const basePackages = [
-    'torch',
     'diffusers',
     'transformers',
     'accelerate',
@@ -2674,9 +2683,9 @@ async function installPythonDeps() {
   
   await runPipInstall(basePackages);
   
-  // Step 2: Install optimum with onnxruntime-gpu
+  // Step 3: Install optimum with onnxruntime-gpu
   // This package installs BOTH optimum's ONNX integration AND onnxruntime-gpu together
-  log('[Deps] Step 2/2: Installing optimum with GPU ONNX Runtime...');
+  log('[Deps] Step 3/3: Installing optimum with GPU ONNX Runtime...');
   if (mainWindow) {
     mainWindow.webContents.send('image-ai-deps-progress', 'Installing optimum with GPU acceleration...');
   }

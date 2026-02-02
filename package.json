@@ -1,6 +1,6 @@
 {
   "name": "computegrid-worker",
-  "version": "1.6.13",
+  "version": "1.6.14",
   "description": "ComputeGrid Worker Desktop App - Earn money by sharing your computing power",
   "main": "src/main.js",
   "homepage": "https://computegrid.app",
