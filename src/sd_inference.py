@@ -6,6 +6,21 @@ Uses ONNX Runtime instead of PyTorch for better Windows compatibility.
 
 import sys
 import os
+import warnings
+
+# Suppress warnings BEFORE any other imports
+# This prevents CUDA/autocast warnings from appearing
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow warnings
+os.environ['TRANSFORMERS_VERBOSITY'] = 'error'  # Suppress transformers warnings
+
+warnings.filterwarnings("ignore", message=".*CUDA is not available.*")
+warnings.filterwarnings("ignore", message=".*torch_xla.*")
+warnings.filterwarnings("ignore", message=".*autocast.*")
+warnings.filterwarnings("ignore", message=".*Disabling autocast.*")
+warnings.filterwarnings("ignore", category=UserWarning, module="diffusers")
+warnings.filterwarnings("ignore", category=UserWarning, module="transformers")
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 import json
 import time
 import base64
