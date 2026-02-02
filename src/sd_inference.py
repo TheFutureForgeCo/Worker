@@ -70,15 +70,18 @@ def main():
                 provider=provider
             )
         else:
-            log(f"Downloading pre-exported ONNX model from Hugging Face...")
+            log(f"Downloading and exporting SD v1.5 to ONNX (one-time setup)...")
+            log(f"This will download ~5GB and convert to ONNX format...")
             pipe = ORTStableDiffusionPipeline.from_pretrained(
-                "modularai/stable-diffusion-1.5-onnx",
+                "runwayml/stable-diffusion-v1-5",
+                export=True,
                 provider=provider
             )
             if model_dir:
-                log(f"Saving ONNX model to: {model_dir}")
+                log(f"Saving exported ONNX model to: {model_dir}")
                 os.makedirs(model_dir, exist_ok=True)
                 pipe.save_pretrained(model_dir)
+                log(f"ONNX model saved - future loads will be faster")
         
         model_load_time = time.time() - start_time
         log(f"Model loaded in {model_load_time:.1f}s")

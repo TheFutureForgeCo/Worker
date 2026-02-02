@@ -2665,6 +2665,7 @@ async function installPythonDeps() {
   }
   
   const packages = [
+    'torch',
     'diffusers',
     'transformers',
     'optimum[onnxruntime]',
