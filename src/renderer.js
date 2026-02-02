@@ -587,7 +587,11 @@ function updateImageAiUI(status) {
     
     // Always show re-run button when Image AI is installed (for manual retesting)
     if (retryBenchmarkBtn) {
-      retryBenchmarkBtn.style.display = 'block';
+      retryBenchmarkBtn.style.display = 'inline-block';
+    }
+    // Always show logs button when Image AI is installed
+    if (toggleBenchmarkLogsBtn) {
+      toggleBenchmarkLogsBtn.style.display = 'inline-block';
     }
   }
   
@@ -818,6 +822,17 @@ if (retryBenchmarkBtn) {
     retryBenchmarkBtn.disabled = true;
     retryBenchmarkBtn.textContent = 'Running...';
     
+    // Clear old logs and show log panel
+    if (benchmarkLogsContent) {
+      benchmarkLogsContent.textContent = '';
+    }
+    if (benchmarkLogsContainer) {
+      benchmarkLogsContainer.style.display = 'block';
+    }
+    if (toggleBenchmarkLogsBtn) {
+      toggleBenchmarkLogsBtn.textContent = 'Hide';
+    }
+    
     if (benchmarkResult) {
       benchmarkResult.textContent = 'Running benchmark...';
     }
@@ -994,6 +1009,20 @@ if (window.electronAPI.onImageAiBenchmarkStart) {
     if (imageAiDownloadStatus) {
       imageAiDownloadStatus.textContent = 'Running performance benchmark...';
     }
+    // Clear old logs and show log panel during initial benchmark
+    if (benchmarkLogsContent) {
+      benchmarkLogsContent.textContent = '';
+    }
+    if (benchmarkLogsContainer) {
+      benchmarkLogsContainer.style.display = 'block';
+    }
+    if (toggleBenchmarkLogsBtn) {
+      toggleBenchmarkLogsBtn.style.display = 'inline-block';
+      toggleBenchmarkLogsBtn.textContent = 'Hide';
+    }
+    if (imageBenchmarkStatus) {
+      imageBenchmarkStatus.style.display = 'flex';
+    }
   });
 }
 
@@ -1062,6 +1091,16 @@ if (window.electronAPI.onImageAiBenchmarkError) {
       imageAiDownloadStatus.style.whiteSpace = 'normal';
       imageAiDownloadStatus.style.maxHeight = '200px';
       imageAiDownloadStatus.style.overflowY = 'auto';
+    }
+    // Show benchmark status and logs button even on error
+    if (imageBenchmarkStatus) {
+      imageBenchmarkStatus.style.display = 'flex';
+    }
+    if (toggleBenchmarkLogsBtn) {
+      toggleBenchmarkLogsBtn.style.display = 'inline-block';
+    }
+    if (retryBenchmarkBtn) {
+      retryBenchmarkBtn.style.display = 'inline-block';
     }
   });
 }
