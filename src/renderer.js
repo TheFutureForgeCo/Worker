@@ -1104,14 +1104,25 @@ window.electronAPI.onNavigate((page) => {
 
 // Listen for update status
 window.electronAPI.onUpdateStatus((data) => {
-  if (data.status === 'downloading') {
-    updateStatus.textContent = `Downloading ${data.version}...`;
+  console.log('[Renderer] Update status:', data);
+  if (data.status === 'checking') {
+    updateStatus.textContent = 'Checking for updates...';
+  } else if (data.status === 'downloading') {
+    if (data.progress !== undefined && data.progress > 0) {
+      const totalMB = data.total ? Math.round(data.total / 1024 / 1024) : '?';
+      const downloadedMB = data.transferred ? Math.round(data.transferred / 1024 / 1024) : '?';
+      updateStatus.textContent = `Downloading ${data.version || 'update'}... ${data.progress}% (${downloadedMB}/${totalMB} MB)`;
+    } else {
+      updateStatus.textContent = `Downloading ${data.version || 'update'}...`;
+    }
   } else if (data.status === 'ready') {
-    updateStatus.textContent = `${data.version} ready to install`;
+    updateStatus.textContent = `${data.version} ready - restart to install`;
   } else if (data.status === 'up-to-date') {
     updateStatus.textContent = 'Up to date';
   } else if (data.status === 'error') {
-    updateStatus.textContent = 'Check failed';
+    const errorMsg = data.error ? data.error.substring(0, 60) : 'Unknown error';
+    updateStatus.textContent = `Update failed: ${errorMsg}`;
+    console.error('[Renderer] Update error:', data.error);
   }
 });
 

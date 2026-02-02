@@ -3495,6 +3495,9 @@ function setupAutoUpdater() {
   
   autoUpdater.on('checking-for-update', () => {
     log('Checking for updates...');
+    if (mainWindow) {
+      mainWindow.webContents.send('update-status', { status: 'checking' });
+    }
   });
   
   autoUpdater.on('update-available', (info) => {
@@ -3502,7 +3505,23 @@ function setupAutoUpdater() {
     if (mainWindow) {
       mainWindow.webContents.send('update-status', { 
         status: 'downloading', 
-        version: info.version 
+        version: info.version,
+        progress: 0
+      });
+    }
+  });
+  
+  // Track download progress
+  autoUpdater.on('download-progress', (progressObj) => {
+    const percent = Math.round(progressObj.percent);
+    log(`Download progress: ${percent}% (${Math.round(progressObj.transferred / 1024 / 1024)}MB / ${Math.round(progressObj.total / 1024 / 1024)}MB)`);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-status', { 
+        status: 'downloading', 
+        progress: percent,
+        bytesPerSecond: progressObj.bytesPerSecond,
+        transferred: progressObj.transferred,
+        total: progressObj.total
       });
     }
   });
@@ -3533,9 +3552,18 @@ function setupAutoUpdater() {
   });
   
   autoUpdater.on('error', (err) => {
-    logError('Auto-updater error', err);
+    const errorMessage = err.message || err.toString();
+    logError('Auto-updater error: ' + errorMessage, err);
+    log('Update error details: ' + JSON.stringify({
+      message: errorMessage,
+      stack: err.stack,
+      code: err.code
+    }));
     if (mainWindow) {
-      mainWindow.webContents.send('update-status', { status: 'error' });
+      mainWindow.webContents.send('update-status', { 
+        status: 'error',
+        error: errorMessage
+      });
     }
   });
   
@@ -3543,6 +3571,12 @@ function setupAutoUpdater() {
   setTimeout(() => {
     autoUpdater.checkForUpdates().catch(err => {
       log('Initial update check failed: ' + err.message);
+      if (mainWindow) {
+        mainWindow.webContents.send('update-status', { 
+          status: 'error',
+          error: 'Failed to check for updates: ' + err.message
+        });
+      }
     });
   }, 10000);
   
