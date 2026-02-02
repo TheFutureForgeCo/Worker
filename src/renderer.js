@@ -1018,9 +1018,12 @@ if (window.electronAPI.onImageAiBenchmarkError) {
       downloadImageAiBtn.style.display = 'flex';
     }
     if (imageAiDownloadStatus) {
-      // Show more of the error message for debugging
-      const shortError = error.length > 100 ? error.substring(0, 100) + '...' : error;
-      imageAiDownloadStatus.textContent = `Benchmark failed: ${shortError}`;
+      // Show full error message for debugging
+      imageAiDownloadStatus.textContent = `Benchmark failed: ${error}`;
+      imageAiDownloadStatus.style.wordBreak = 'break-word';
+      imageAiDownloadStatus.style.whiteSpace = 'normal';
+      imageAiDownloadStatus.style.maxHeight = '200px';
+      imageAiDownloadStatus.style.overflowY = 'auto';
     }
   });
 }
