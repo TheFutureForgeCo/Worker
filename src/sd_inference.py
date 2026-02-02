@@ -59,20 +59,20 @@ def main():
             provider = 'CPUExecutionProvider'
             log("Using CPU (this will be slow)")
         
-        log("Loading Stable Diffusion ONNX pipeline...")
+        log("Loading Stable Diffusion ONNX pipeline via Optimum...")
         
-        from diffusers import OnnxStableDiffusionPipeline
+        from optimum.onnxruntime import ORTStableDiffusionPipeline
         
         if model_dir and os.path.exists(os.path.join(model_dir, "model_index.json")):
             log(f"Loading from local ONNX model: {model_dir}")
-            pipe = OnnxStableDiffusionPipeline.from_pretrained(
+            pipe = ORTStableDiffusionPipeline.from_pretrained(
                 model_dir,
                 provider=provider
             )
         else:
             log(f"Downloading pre-exported ONNX model from Hugging Face...")
-            pipe = OnnxStableDiffusionPipeline.from_pretrained(
-                "modularai/stable-diffusion-1.5-onnx",
+            pipe = ORTStableDiffusionPipeline.from_pretrained(
+                "OnnxStack/stable-diffusion-v1-5-onnx",
                 provider=provider
             )
             if model_dir:

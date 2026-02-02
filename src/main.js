@@ -2665,9 +2665,10 @@ async function installPythonDeps() {
   }
   
   const packages = [
-    'diffusers[onnx]',
+    'diffusers',
     'transformers',
     'optimum[onnxruntime]',
+    'accelerate',
     'safetensors',
     'numpy',
     'Pillow',
