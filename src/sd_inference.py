@@ -159,15 +159,32 @@ def main():
             )
             log("Local model loaded successfully")
         else:
-            log(f"Downloading and exporting SD v1.5 to ONNX (one-time setup)...")
-            log(f"This will download ~5GB and convert to ONNX format...")
-            pipe = ORTStableDiffusionPipeline.from_pretrained(
-                "runwayml/stable-diffusion-v1-5",
-                export=True,
-                provider=provider
-            )
+            # Use pre-exported ONNX model - NO local conversion needed
+            # This downloads ready-to-use ONNX files (~2.5GB) instead of converting locally
+            log(f"Downloading pre-exported ONNX model (one-time setup)...")
+            log(f"This will download ~2.5GB of pre-converted ONNX files...")
+            
+            # Try the official ONNX branch first
+            onnx_model_id = "runwayml/stable-diffusion-v1-5"
+            
+            try:
+                pipe = ORTStableDiffusionPipeline.from_pretrained(
+                    onnx_model_id,
+                    revision="onnx",
+                    provider=provider
+                )
+                log(f"Loaded pre-exported ONNX model from {onnx_model_id}")
+            except Exception as onnx_err:
+                log(f"Failed to load ONNX revision: {onnx_err}")
+                log("Trying alternative: download and export (requires more memory)...")
+                pipe = ORTStableDiffusionPipeline.from_pretrained(
+                    onnx_model_id,
+                    export=True,
+                    provider=provider
+                )
+            
             if model_dir:
-                log(f"Saving exported ONNX model to: {model_dir}")
+                log(f"Saving ONNX model to: {model_dir}")
                 os.makedirs(model_dir, exist_ok=True)
                 pipe.save_pretrained(model_dir)
                 log(f"ONNX model saved - future loads will be faster")
