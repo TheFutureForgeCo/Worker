@@ -2694,6 +2694,15 @@ async function installPythonDeps() {
     // optimum[onnxruntime-gpu] installs optimum with CUDA-enabled onnxruntime
     await runPipInstall(['optimum[onnxruntime-gpu]']);
     log('[Deps] Optimum with ONNX Runtime GPU installed successfully');
+    
+    // Step 4: FORCE install onnxruntime-gpu to ensure GPU version is present
+    // Sometimes optimum installs CPU version, so we explicitly install GPU version last
+    log('[Deps] Step 4/4: Forcing ONNX Runtime GPU installation...');
+    if (mainWindow) {
+      mainWindow.webContents.send('image-ai-deps-progress', 'Forcing GPU ONNX Runtime (final step)...');
+    }
+    await runPipInstall(['onnxruntime-gpu']);
+    log('[Deps] ONNX Runtime GPU force-installed successfully');
   } catch (err) {
     // Fall back to CPU-only if GPU fails
     log('[Deps] GPU version failed, trying CPU version...');

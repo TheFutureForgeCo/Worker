@@ -30,6 +30,60 @@ def log(message):
     """Log to stderr for the Electron app to capture"""
     print(f"[SD-ONNX] {message}", file=sys.stderr, flush=True)
 
+def log_gpu_info():
+    """Log detailed GPU information for debugging"""
+    try:
+        import torch
+        log(f"PyTorch version: {torch.__version__}")
+        log(f"PyTorch CUDA available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            log(f"PyTorch CUDA version: {torch.version.cuda}")
+            log(f"GPU count: {torch.cuda.device_count()}")
+            for i in range(torch.cuda.device_count()):
+                props = torch.cuda.get_device_properties(i)
+                log(f"GPU {i}: {props.name}, {props.total_memory / 1024**3:.1f} GB VRAM")
+    except Exception as e:
+        log(f"PyTorch GPU info error: {e}")
+    
+    try:
+        import onnxruntime as ort
+        log(f"ONNX Runtime version: {ort.__version__}")
+        log(f"ONNX Runtime available providers: {ort.get_available_providers()}")
+        
+        # Check if CUDA provider has actual GPU devices
+        if 'CUDAExecutionProvider' in ort.get_available_providers():
+            try:
+                # Create a test session to verify CUDA works
+                sess_options = ort.SessionOptions()
+                sess_options.log_severity_level = 3  # Suppress logs
+                log("CUDA provider detected - will attempt GPU inference")
+            except Exception as e:
+                log(f"CUDA provider check error: {e}")
+    except Exception as e:
+        log(f"ONNX Runtime info error: {e}")
+
+def verify_provider_in_use(pipe, expected_provider):
+    """Verify which provider the pipeline is actually using"""
+    try:
+        # Check the unet session (main compute component)
+        if hasattr(pipe, 'unet') and hasattr(pipe.unet, 'session'):
+            session = pipe.unet.session
+            providers_in_use = session.get_providers()
+            log(f"UNET session providers: {providers_in_use}")
+            
+            if expected_provider in providers_in_use:
+                log(f"VERIFIED: {expected_provider} is active for UNET")
+                return True
+            else:
+                log(f"WARNING: Expected {expected_provider} but got {providers_in_use}")
+                return False
+        else:
+            log("Could not access pipeline session to verify provider")
+            return None
+    except Exception as e:
+        log(f"Provider verification error: {e}")
+        return None
+
 def main():
     if len(sys.argv) < 2:
         print(json.dumps({"error": "No input provided", "success": False}))
@@ -47,40 +101,54 @@ def main():
         output_path = input_data.get("output_path", "")
         is_benchmark = input_data.get("is_benchmark", False)
         
-        log(f"Starting ONNX image generation: {width}x{height}, seed={seed}")
+        log("=" * 60)
+        log("BENCHMARK START" if is_benchmark else "IMAGE GENERATION START")
+        log("=" * 60)
+        log(f"Image size: {width}x{height}, seed={seed}")
         log(f"Prompt: {prompt[:50]}...")
+        log(f"Model dir: {model_dir}")
+        log(f"Is benchmark: {is_benchmark}")
         
         start_time = time.time()
         
-        log("Loading ONNX Runtime and dependencies...")
+        # Step 1: Log system info
+        log("-" * 40)
+        log("STEP 1: System Information")
+        log("-" * 40)
+        log_gpu_info()
+        
+        # Step 2: Load ONNX Runtime
+        log("-" * 40)
+        log("STEP 2: Loading ONNX Runtime")
+        log("-" * 40)
         import numpy as np
         import onnxruntime as ort
         
-        log(f"ONNX Runtime version: {ort.__version__}")
-        
         providers = ort.get_available_providers()
-        log(f"Available providers: {providers}")
+        log(f"Available execution providers: {providers}")
         
         use_cuda = 'CUDAExecutionProvider' in providers
         use_dml = 'DmlExecutionProvider' in providers
         
-        # Log all available providers for debugging
-        log(f"CUDA available: {use_cuda}, DirectML available: {use_dml}")
+        log(f"CUDA provider available: {use_cuda}")
+        log(f"DirectML provider available: {use_dml}")
         
         if use_cuda:
-            # CUDA is preferred for NVIDIA GPUs - should be ~3-5 seconds
             provider = 'CUDAExecutionProvider'
-            log("Using CUDA acceleration (NVIDIA GPU)")
+            log("SELECTED: CUDAExecutionProvider (NVIDIA GPU)")
         elif use_dml:
-            # DirectML works on any Windows GPU without CUDA toolkit
             provider = 'DmlExecutionProvider'
-            log("Using DirectML acceleration (Windows GPU)")
+            log("SELECTED: DmlExecutionProvider (Windows GPU)")
         else:
             provider = 'CPUExecutionProvider'
-            log("WARNING: Using CPU only - this will be VERY slow (30+ seconds)")
+            log("SELECTED: CPUExecutionProvider (CPU ONLY - SLOW!)")
         
-        log("Loading Stable Diffusion ONNX pipeline via Optimum...")
+        # Step 3: Load pipeline
+        log("-" * 40)
+        log("STEP 3: Loading Stable Diffusion Pipeline")
+        log("-" * 40)
         
+        pipeline_load_start = time.time()
         from optimum.onnxruntime import ORTStableDiffusionPipeline
         
         if model_dir and os.path.exists(os.path.join(model_dir, "model_index.json")):
@@ -89,6 +157,7 @@ def main():
                 model_dir,
                 provider=provider
             )
+            log("Local model loaded successfully")
         else:
             log(f"Downloading and exporting SD v1.5 to ONNX (one-time setup)...")
             log(f"This will download ~5GB and convert to ONNX format...")
@@ -103,15 +172,30 @@ def main():
                 pipe.save_pretrained(model_dir)
                 log(f"ONNX model saved - future loads will be faster")
         
-        model_load_time = time.time() - start_time
-        log(f"Model loaded in {model_load_time:.1f}s")
+        pipeline_load_time = time.time() - pipeline_load_start
+        log(f"Pipeline loaded in {pipeline_load_time:.2f}s")
+        
+        # Step 4: Verify provider is actually being used
+        log("-" * 40)
+        log("STEP 4: Verifying GPU Provider")
+        log("-" * 40)
+        provider_verified = verify_provider_in_use(pipe, provider)
+        if provider_verified is False:
+            log("WARNING: GPU provider not active! May be using CPU fallback.")
+        
+        # Step 5: Generate image
+        log("-" * 40)
+        log("STEP 5: Generating Image")
+        log("-" * 40)
         
         np.random.seed(seed)
         
-        log("Generating image...")
-        gen_start = time.time()
-        
         num_steps = 20 if is_benchmark else 25
+        log(f"Inference steps: {num_steps}")
+        log(f"Guidance scale: 7.5")
+        
+        gen_start = time.time()
+        log("Starting inference...")
         
         result = pipe(
             prompt,
@@ -125,7 +209,25 @@ def main():
         gen_time = time.time() - gen_start
         total_time = time.time() - start_time
         
-        log(f"Image generated in {gen_time:.1f}s (total: {total_time:.1f}s)")
+        # Step 6: Results
+        log("-" * 40)
+        log("STEP 6: Results")
+        log("-" * 40)
+        log(f"Generation time: {gen_time:.2f}s")
+        log(f"Pipeline load time: {pipeline_load_time:.2f}s")
+        log(f"Total time: {total_time:.2f}s")
+        log(f"Time per step: {gen_time / num_steps:.3f}s")
+        log(f"Provider used: {provider}")
+        
+        # Performance analysis
+        if gen_time < 8:
+            log("PERFORMANCE: EXCELLENT (GPU working correctly)")
+        elif gen_time < 15:
+            log("PERFORMANCE: GOOD (GPU acceleration active)")
+        elif gen_time < 25:
+            log("PERFORMANCE: SLOW (May be using CPU or suboptimal settings)")
+        else:
+            log("PERFORMANCE: VERY SLOW (Likely using CPU instead of GPU)")
         
         buffer = BytesIO()
         image.save(buffer, format="PNG")
@@ -135,16 +237,21 @@ def main():
             image.save(output_path, format="PNG")
             log(f"Image saved to: {output_path}")
         
+        log("=" * 60)
+        log("BENCHMARK COMPLETE" if is_benchmark else "GENERATION COMPLETE")
+        log("=" * 60)
+        
         result = {
             "success": True,
             "image_base64": image_base64,
             "width": width,
             "height": height,
             "seed": seed,
-            "model_load_time_ms": int(model_load_time * 1000),
+            "model_load_time_ms": int(pipeline_load_time * 1000),
             "generation_time_ms": int(gen_time * 1000),
             "total_time_ms": int(total_time * 1000),
-            "provider": provider
+            "provider": provider,
+            "provider_verified": provider_verified
         }
         
         print(json.dumps(result))
