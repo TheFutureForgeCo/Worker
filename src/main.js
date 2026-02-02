@@ -2717,55 +2717,141 @@ async function installPythonDeps() {
   
   await runPipInstall(basePackages);
   
-  // Step 3: Install optimum with onnxruntime-gpu
-  // This package installs BOTH optimum's ONNX integration AND onnxruntime-gpu together
-  log('[Deps] Step 3/3: Installing optimum with GPU ONNX Runtime...');
+  // Step 3: Detect GPU type and install appropriate ONNX Runtime
+  log('[Deps] Step 3/7: Detecting GPU type...');
   if (mainWindow) {
-    mainWindow.webContents.send('image-ai-deps-progress', 'Installing optimum with GPU acceleration...');
+    mainWindow.webContents.send('image-ai-deps-progress', 'Detecting GPU type...');
+  }
+  
+  // Detect if NVIDIA GPU is present (CUDA) or Intel/AMD (DirectML)
+  let hasNvidiaGpu = false;
+  try {
+    const { execSync } = require('child_process');
+    // Check for NVIDIA GPU using nvidia-smi or wmic
+    if (process.platform === 'win32') {
+      try {
+        const wmic = execSync('wmic path win32_VideoController get name', { encoding: 'utf8' });
+        hasNvidiaGpu = wmic.toLowerCase().includes('nvidia');
+        log(`[Deps] GPU detection result: ${wmic.trim()}`);
+      } catch (e) {
+        log('[Deps] wmic check failed, trying nvidia-smi...');
+        try {
+          execSync('nvidia-smi', { encoding: 'utf8' });
+          hasNvidiaGpu = true;
+        } catch (e2) {
+          hasNvidiaGpu = false;
+        }
+      }
+    } else {
+      // On Linux, check for nvidia-smi
+      try {
+        execSync('nvidia-smi', { encoding: 'utf8' });
+        hasNvidiaGpu = true;
+      } catch (e) {
+        hasNvidiaGpu = false;
+      }
+    }
+    log(`[Deps] NVIDIA GPU detected: ${hasNvidiaGpu}`);
+  } catch (detectErr) {
+    log(`[Deps] GPU detection error: ${detectErr.message}`);
+    hasNvidiaGpu = false;
+  }
+  
+  // Step 4: Remove any existing onnxruntime versions to prevent conflicts
+  log('[Deps] Step 4/7: Removing existing ONNX Runtime versions...');
+  if (mainWindow) {
+    mainWindow.webContents.send('image-ai-deps-progress', 'Removing old ONNX Runtime versions...');
   }
   
   try {
-    // Step 4: Uninstall any existing onnxruntime (CPU version) to prevent conflicts FIRST
-    log('[Deps] Step 4/6: Removing CPU ONNX Runtime if present...');
+    await runPipUninstall(['onnxruntime', 'onnxruntime-gpu', 'onnxruntime-directml']);
+    log('[Deps] Removed existing ONNX Runtime versions');
+  } catch (uninstallErr) {
+    log('[Deps] No existing runtime to remove (this is OK)');
+  }
+  
+  // Step 5: Install the appropriate ONNX Runtime for this GPU
+  log('[Deps] Step 5/7: Installing ONNX Runtime...');
+  
+  let onnxRuntimePackage = 'onnxruntime';  // CPU fallback
+  if (hasNvidiaGpu) {
+    onnxRuntimePackage = 'onnxruntime-gpu==1.16.3';
+    log('[Deps] Installing onnxruntime-gpu for NVIDIA CUDA...');
     if (mainWindow) {
-      mainWindow.webContents.send('image-ai-deps-progress', 'Removing CPU runtime (if any)...');
+      mainWindow.webContents.send('image-ai-deps-progress', 'Installing ONNX Runtime for NVIDIA GPU...');
     }
-    
-    // Uninstall both CPU versions that might interfere
-    try {
-      await runPipUninstall(['onnxruntime', 'onnxruntime-directml']);
-      log('[Deps] Removed CPU/DirectML ONNX Runtime versions');
-    } catch (uninstallErr) {
-      log('[Deps] No CPU runtime to remove (this is OK)');
-    }
-    
-    // Step 5: Install onnxruntime-gpu FRESH (no conflicts)
-    log('[Deps] Step 5/6: Installing ONNX Runtime GPU...');
+  } else if (process.platform === 'win32') {
+    // Intel/AMD on Windows use DirectML
+    onnxRuntimePackage = 'onnxruntime-directml';
+    log('[Deps] Installing onnxruntime-directml for Intel/AMD GPU...');
     if (mainWindow) {
-      mainWindow.webContents.send('image-ai-deps-progress', 'Installing CUDA ONNX Runtime...');
+      mainWindow.webContents.send('image-ai-deps-progress', 'Installing ONNX Runtime DirectML for Intel/AMD GPU...');
     }
-    await runPipInstall(['onnxruntime-gpu==1.16.3']);  // Pin to known working version
-    log('[Deps] ONNX Runtime GPU installed successfully');
-    
-    // Step 6: Install optimum WITH onnxruntime integration (no-deps to avoid CPU runtime reinstall)
-    log('[Deps] Step 6/6: Installing optimum with ONNX Runtime integration...');
+  } else {
+    log('[Deps] Installing onnxruntime CPU version...');
     if (mainWindow) {
-      mainWindow.webContents.send('image-ai-deps-progress', 'Installing optimum onnxruntime integration...');
+      mainWindow.webContents.send('image-ai-deps-progress', 'Installing ONNX Runtime (CPU)...');
     }
-    // Install optimum[onnxruntime] but use --no-deps to avoid reinstalling CPU onnxruntime
-    // Then let it install just optimum core packages
+  }
+  
+  try {
+    await runPipInstall([onnxRuntimePackage]);
+    log(`[Deps] ${onnxRuntimePackage} installed successfully`);
+  } catch (runtimeErr) {
+    log(`[Deps] Failed to install ${onnxRuntimePackage}: ${runtimeErr.message}`);
+    // Fallback to CPU version
+    log('[Deps] Falling back to CPU-only onnxruntime...');
+    await runPipInstall(['onnxruntime']);
+  }
+  
+  // Step 6: Install optimum base package (without onnxruntime extra to avoid reinstalling CPU version)
+  log('[Deps] Step 6/7: Installing optimum base package...');
+  if (mainWindow) {
+    mainWindow.webContents.send('image-ai-deps-progress', 'Installing optimum (AI optimization library)...');
+  }
+  await runPipInstall(['optimum']);
+  
+  // Step 7: Manually install optimum's onnxruntime submodule dependencies
+  // The optimum[onnxruntime] extra installs onnxruntime which overwrites our GPU version
+  // So we just need to ensure the submodule files exist - they come with optimum package
+  log('[Deps] Step 7/7: Verifying optimum.onnxruntime module...');
+  if (mainWindow) {
+    mainWindow.webContents.send('image-ai-deps-progress', 'Verifying optimum ONNX integration...');
+  }
+  
+  // The optimum.onnxruntime module should be included with optimum base package
+  // If not, we need to reinstall optimum with the extra but tell pip not to upgrade onnxruntime
+  const verifyOptimum = () => {
+    return new Promise((resolve) => {
+      const checkScript = `
+import sys
+try:
+    from optimum.onnxruntime import ORTStableDiffusionPipeline
+    print("OK")
+except ImportError as e:
+    print(f"MISSING: {e}")
+`;
+      const proc = spawn(PYTHON_EXE, ['-c', checkScript], { env: process.env });
+      let output = '';
+      proc.stdout.on('data', (data) => { output += data.toString(); });
+      proc.stderr.on('data', (data) => { output += data.toString(); });
+      proc.on('close', () => {
+        resolve(output.includes('OK'));
+      });
+    });
+  };
+  
+  const optimumOk = await verifyOptimum();
+  if (!optimumOk) {
+    log('[Deps] optimum.onnxruntime not found, installing with onnxruntime extra...');
+    // Install optimum[onnxruntime] but with --no-deps to avoid pulling in CPU onnxruntime
+    // Then install the other deps of optimum[onnxruntime] individually
     await runPipInstall(['optimum[onnxruntime]'], ['--no-deps']);
-    // Now install optimum's other dependencies without the onnxruntime dep
-    await runPipInstall(['optimum']);
-    log('[Deps] Optimum with ONNX Runtime integration installed');
-  } catch (err) {
-    // Fall back to CPU-only if GPU fails
-    log('[Deps] GPU version failed, trying CPU version...');
-    if (mainWindow) {
-      mainWindow.webContents.send('image-ai-deps-progress', 'Installing optimum (CPU fallback)...');
-    }
-    await runPipInstall(['optimum[onnxruntime]']);
-    log('[Deps] Optimum with ONNX Runtime CPU installed');
+    // Install onnxruntime dependencies that optimum needs (except onnxruntime itself)
+    await runPipInstall(['onnx', 'protobuf']);
+    log('[Deps] Installed optimum onnxruntime integration');
+  } else {
+    log('[Deps] optimum.onnxruntime module verified OK');
   }
   
   log('[Deps] All dependencies installed successfully');
@@ -2921,20 +3007,28 @@ async function runBenchmark() {
       
       return { success: true, time: totalTime, tier: config.imageQualityTier };
     } else {
-      // Show full error details
-      const fullError = result.error || 'Unknown error during image generation';
-      log(`[Benchmark] Generation failed: ${fullError}`);
-      throw new Error(fullError);
+      // Show full error details - use fullError if available for complete info
+      const fullErrorText = result.fullError || result.error || 'Unknown error during image generation';
+      log(`[Benchmark] Generation failed: ${result.error}`);
+      log(`[Benchmark] Full error output:\n${fullErrorText}`);
+      
+      // Create an error with both short and full error
+      const err = new Error(result.error);
+      err.fullError = fullErrorText;
+      throw err;
     }
   } catch (err) {
-    const errorDetails = err.message || String(err);
-    log(`[Benchmark] Failed: ${errorDetails}`);
+    // Include fullError for complete debugging info
+    const shortError = err.message || String(err);
+    const fullErrorDetails = err.fullError || shortError;
+    log(`[Benchmark] Failed: ${shortError}`);
     
     if (mainWindow) {
-      mainWindow.webContents.send('image-ai-benchmark-error', errorDetails);
+      // Send full error so renderer can display complete info in logs
+      mainWindow.webContents.send('image-ai-benchmark-error', fullErrorDetails);
     }
     
-    return { success: false, error: errorDetails };
+    return { success: false, error: shortError, fullError: fullErrorDetails };
   }
 }
 
@@ -3059,20 +3153,21 @@ async function generateImage(params) {
             l.includes('No module named')
           );
           if (errorLines.length > 0) {
-            // Get the most relevant error lines
-            const relevantErrors = errorLines.slice(-5).join(' | ');
-            // Clean up the error message for display
+            // Get the most relevant error lines - include more context
+            const relevantErrors = errorLines.slice(-8).join(' | ');
+            // Clean up the error message for display - keep more content
             errorMessage = relevantErrors
               .replace(/File ".*?", line \d+, in \w+/g, '')
               .replace(/\s+/g, ' ')
               .trim()
-              .substring(0, 300);
+              .substring(0, 1000);  // Increased from 300 to 1000
           } else if (lines.length > 0) {
-            // Use last few lines as the error
-            errorMessage = lines.slice(-3).join(' | ').substring(0, 300);
+            // Use last few lines as the error - keep more
+            errorMessage = lines.slice(-6).join(' | ').substring(0, 1000);
           }
         }
-        resolve({ success: false, error: errorMessage, fullError: errorOutput });
+        // Include full stderr in fullError for debugging (up to 5000 chars)
+        resolve({ success: false, error: errorMessage, fullError: stderr.slice(-5000) });
       }
     });
     
