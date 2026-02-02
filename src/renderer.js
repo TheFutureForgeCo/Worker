@@ -76,6 +76,10 @@ const deleteImageAiStatus = document.getElementById('deleteImageAiStatus');
 const imageBenchmarkStatus = document.getElementById('imageBenchmarkStatus');
 const benchmarkResult = document.getElementById('benchmarkResult');
 const retryBenchmarkBtn = document.getElementById('retryBenchmarkBtn');
+const toggleBenchmarkLogsBtn = document.getElementById('toggleBenchmarkLogsBtn');
+const benchmarkLogsContainer = document.getElementById('benchmarkLogsContainer');
+const benchmarkLogsContent = document.getElementById('benchmarkLogsContent');
+const clearBenchmarkLogsBtn = document.getElementById('clearBenchmarkLogsBtn');
 
 // DOM Elements - Image AI Warning Modal
 const imageAiWarningModal = document.getElementById('imageAiWarningModal');
@@ -840,6 +844,41 @@ if (retryBenchmarkBtn) {
       }
     } finally {
       retryBenchmarkBtn.disabled = false;
+    }
+  });
+}
+
+// Benchmark logs toggle
+if (toggleBenchmarkLogsBtn) {
+  toggleBenchmarkLogsBtn.addEventListener('click', () => {
+    if (benchmarkLogsContainer) {
+      const isVisible = benchmarkLogsContainer.style.display !== 'none';
+      benchmarkLogsContainer.style.display = isVisible ? 'none' : 'block';
+      toggleBenchmarkLogsBtn.textContent = isVisible ? 'Logs' : 'Hide';
+    }
+  });
+}
+
+// Clear benchmark logs
+if (clearBenchmarkLogsBtn) {
+  clearBenchmarkLogsBtn.addEventListener('click', () => {
+    if (benchmarkLogsContent) {
+      benchmarkLogsContent.textContent = '';
+    }
+  });
+}
+
+// Listen for benchmark logs from main process
+if (window.electronAPI.onBenchmarkLog) {
+  window.electronAPI.onBenchmarkLog((logLine) => {
+    if (benchmarkLogsContent) {
+      benchmarkLogsContent.textContent += logLine + '\n';
+      // Auto-scroll to bottom
+      benchmarkLogsContent.scrollTop = benchmarkLogsContent.scrollHeight;
+    }
+    // Show the logs button when there are logs
+    if (toggleBenchmarkLogsBtn) {
+      toggleBenchmarkLogsBtn.style.display = 'inline-block';
     }
   });
 }

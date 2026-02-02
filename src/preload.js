@@ -50,6 +50,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   retryImageBenchmark: () => ipcRenderer.invoke('retry-image-benchmark'),
   generateImage: (params) => ipcRenderer.invoke('generate-image', params),
   
+  // Bundle management (pre-packaged AI assets)
+  checkBundleStatus: () => ipcRenderer.invoke('check-bundle-status'),
+  getBundlePaths: () => ipcRenderer.invoke('get-bundle-paths'),
+  installBundle: () => ipcRenderer.invoke('install-bundle'),
+  
   // Event listeners
   onStatusUpdate: (callback) => {
     ipcRenderer.on('status-update', (event, data) => callback(data));
@@ -81,6 +86,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onImageAiBenchmarkFallback: (callback) => {
     ipcRenderer.on('image-ai-benchmark-fallback', (event, data) => callback(data));
   },
+  onBenchmarkLog: (callback) => {
+    ipcRenderer.on('benchmark-log', (event, logLine) => callback(logLine));
+  },
   onImageAiError: (callback) => {
     ipcRenderer.on('image-ai-error', (event, error) => callback(error));
   },
@@ -92,5 +100,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   onOllamaSetupComplete: (callback) => {
     ipcRenderer.on('ollama-setup-complete', (event) => callback());
+  },
+  
+  // Bundle events
+  onBundleProgress: (callback) => {
+    ipcRenderer.on('bundle-progress', (event, progress) => callback(progress));
+  },
+  onBundleStatus: (callback) => {
+    ipcRenderer.on('bundle-status', (event, status) => callback(status));
   }
 });

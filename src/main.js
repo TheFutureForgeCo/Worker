@@ -2654,6 +2654,39 @@ async function installPythonDeps() {
     });
   };
   
+  // Helper function to run pip uninstall
+  const runPipUninstall = (packages) => {
+    return new Promise((resolve, reject) => {
+      const args = ['-m', 'pip', 'uninstall', '-y', ...packages];
+      log(`[Deps] Running: python ${args.join(' ')}`);
+      
+      const proc = spawn(PYTHON_EXE, args, {
+        env: { ...process.env, PIP_DISABLE_PIP_VERSION_CHECK: '1' }
+      });
+      
+      let output = '';
+      
+      proc.stdout.on('data', (data) => {
+        output += data.toString();
+        log(`[Deps] ${data.toString().trim()}`);
+      });
+      
+      proc.stderr.on('data', (data) => {
+        output += data.toString();
+      });
+      
+      proc.on('close', (code) => {
+        // Uninstall can "fail" if package wasn't installed - that's OK
+        resolve(output);
+      });
+      
+      proc.on('error', (err) => {
+        log(`[Deps] Uninstall error: ${err.message}`);
+        resolve(''); // Don't reject, just continue
+      });
+    });
+  };
+  
   // Step 1: Install PyTorch with CUDA support (requires special wheel index)
   log('[Deps] Step 1/3: Installing PyTorch with CUDA support...');
   if (mainWindow) {
@@ -2691,18 +2724,31 @@ async function installPythonDeps() {
   }
   
   try {
-    // optimum[onnxruntime-gpu] installs optimum with CUDA-enabled onnxruntime
-    await runPipInstall(['optimum[onnxruntime-gpu]']);
-    log('[Deps] Optimum with ONNX Runtime GPU installed successfully');
+    // First install optimum WITHOUT onnxruntime to get the package structure
+    await runPipInstall(['optimum']);
+    log('[Deps] Optimum base package installed');
     
-    // Step 4: FORCE install onnxruntime-gpu to ensure GPU version is present
-    // Sometimes optimum installs CPU version, so we explicitly install GPU version last
-    log('[Deps] Step 4/4: Forcing ONNX Runtime GPU installation...');
+    // Step 4: Uninstall any existing onnxruntime (CPU version) to prevent conflicts
+    log('[Deps] Step 4/5: Removing CPU ONNX Runtime if present...');
     if (mainWindow) {
-      mainWindow.webContents.send('image-ai-deps-progress', 'Forcing GPU ONNX Runtime (final step)...');
+      mainWindow.webContents.send('image-ai-deps-progress', 'Removing CPU runtime (if any)...');
     }
-    await runPipInstall(['onnxruntime-gpu']);
-    log('[Deps] ONNX Runtime GPU force-installed successfully');
+    
+    // Uninstall both CPU versions that might interfere
+    try {
+      await runPipUninstall(['onnxruntime', 'onnxruntime-directml']);
+      log('[Deps] Removed CPU/DirectML ONNX Runtime versions');
+    } catch (uninstallErr) {
+      log('[Deps] No CPU runtime to remove (this is OK)');
+    }
+    
+    // Step 5: Install onnxruntime-gpu FRESH (no conflicts)
+    log('[Deps] Step 5/5: Installing ONNX Runtime GPU...');
+    if (mainWindow) {
+      mainWindow.webContents.send('image-ai-deps-progress', 'Installing CUDA ONNX Runtime...');
+    }
+    await runPipInstall(['onnxruntime-gpu==1.16.3']);  // Pin to known working version
+    log('[Deps] ONNX Runtime GPU installed successfully');
   } catch (err) {
     // Fall back to CPU-only if GPU fails
     log('[Deps] GPU version failed, trying CPU version...');
@@ -2964,6 +3010,10 @@ async function generateImage(params) {
       const lines = msg.split('\n').filter(l => l.trim());
       for (const line of lines) {
         log(`[SD] ${line}`);
+        // Send benchmark logs to renderer for display
+        if ((is_benchmark || params.is_benchmark) && mainWindow) {
+          mainWindow.webContents.send('benchmark-log', line);
+        }
       }
     });
     
