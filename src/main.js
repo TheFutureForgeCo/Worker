@@ -2804,30 +2804,41 @@ async function installPythonDeps() {
     await runPipInstall(['onnxruntime']);
   }
   
-  // Step 6: Install optimum base package (without onnxruntime extra to avoid reinstalling CPU version)
-  log('[Deps] Step 6/7: Installing optimum base package...');
+  // Step 6: Install optimum with onnxruntime extra (this installs the submodule)
+  // Note: This will temporarily install CPU onnxruntime, which we'll override in step 7
+  log('[Deps] Step 6/8: Installing optimum[onnxruntime]...');
   if (mainWindow) {
     mainWindow.webContents.send('image-ai-deps-progress', 'Installing optimum (AI optimization library)...');
   }
-  await runPipInstall(['optimum']);
+  await runPipInstall(['optimum[onnxruntime]']);
   
-  // Step 7: Manually install optimum's onnxruntime submodule dependencies
-  // The optimum[onnxruntime] extra installs onnxruntime which overwrites our GPU version
-  // So we just need to ensure the submodule files exist - they come with optimum package
-  log('[Deps] Step 7/7: Verifying optimum.onnxruntime module...');
+  // Step 7: Reinstall GPU runtime to override the CPU version that optimum installed
+  log(`[Deps] Step 7/8: Reinstalling ${onnxRuntimePackage} (override CPU version)...`);
+  if (mainWindow) {
+    mainWindow.webContents.send('image-ai-deps-progress', `Reinstalling ${onnxRuntimePackage}...`);
+  }
+  try {
+    await runPipInstall([onnxRuntimePackage], ['--force-reinstall', '--no-deps']);
+    log(`[Deps] Reinstalled ${onnxRuntimePackage} successfully`);
+  } catch (reinstallErr) {
+    log(`[Deps] Warning: Failed to reinstall ${onnxRuntimePackage}: ${reinstallErr.message}`);
+  }
+  
+  // Step 8: Verify optimum.onnxruntime module works
+  log('[Deps] Step 8/8: Verifying optimum.onnxruntime module...');
   if (mainWindow) {
     mainWindow.webContents.send('image-ai-deps-progress', 'Verifying optimum ONNX integration...');
   }
   
-  // The optimum.onnxruntime module should be included with optimum base package
-  // If not, we need to reinstall optimum with the extra but tell pip not to upgrade onnxruntime
   const verifyOptimum = () => {
     return new Promise((resolve) => {
       const checkScript = `
 import sys
 try:
     from optimum.onnxruntime import ORTStableDiffusionPipeline
-    print("OK")
+    import onnxruntime as ort
+    providers = ort.get_available_providers()
+    print(f"OK: providers={providers}")
 except ImportError as e:
     print(f"MISSING: {e}")
 `;
@@ -2836,6 +2847,7 @@ except ImportError as e:
       proc.stdout.on('data', (data) => { output += data.toString(); });
       proc.stderr.on('data', (data) => { output += data.toString(); });
       proc.on('close', () => {
+        log(`[Deps] optimum verification: ${output.trim()}`);
         resolve(output.includes('OK'));
       });
     });
@@ -2843,13 +2855,8 @@ except ImportError as e:
   
   const optimumOk = await verifyOptimum();
   if (!optimumOk) {
-    log('[Deps] optimum.onnxruntime not found, installing with onnxruntime extra...');
-    // Install optimum[onnxruntime] but with --no-deps to avoid pulling in CPU onnxruntime
-    // Then install the other deps of optimum[onnxruntime] individually
-    await runPipInstall(['optimum[onnxruntime]'], ['--no-deps']);
-    // Install onnxruntime dependencies that optimum needs (except onnxruntime itself)
-    await runPipInstall(['onnx', 'protobuf']);
-    log('[Deps] Installed optimum onnxruntime integration');
+    log('[Deps] WARNING: optimum.onnxruntime module verification failed');
+    log('[Deps] User may need to delete image-ai folder and re-download');
   } else {
     log('[Deps] optimum.onnxruntime module verified OK');
   }
