@@ -3041,28 +3041,69 @@ async function generateImage(params) {
   
   return new Promise((resolve, reject) => {
     // Get the inference script path - check multiple locations
-    const possiblePaths = app.isPackaged
-      ? [
-          path.join(process.resourcesPath, 'app.asar.unpacked', 'src', 'sd_inference.py'),
-          path.join(process.resourcesPath, 'sd_inference.py'),
-          path.join(__dirname, 'sd_inference.py')
-        ]
-      : [
-          path.join(__dirname, 'sd_inference.py'),
-          path.join(process.cwd(), 'src', 'sd_inference.py')
-        ];
+    // IMPORTANT: Python cannot read files inside app.asar, so we MUST use unpacked paths
+    // or copy the script to a location Python can access
+    
+    log(`[Generate] Searching for inference script...`);
+    log(`[Generate] app.isPackaged: ${app.isPackaged}`);
+    log(`[Generate] __dirname: ${__dirname}`);
+    if (app.isPackaged) {
+      log(`[Generate] resourcesPath: ${process.resourcesPath}`);
+    }
     
     let scriptPath = null;
-    for (const p of possiblePaths) {
-      if (fs.existsSync(p)) {
-        scriptPath = p;
-        break;
+    
+    if (app.isPackaged) {
+      // In packaged builds, ONLY use unpacked paths (Python can't access asar)
+      const unpackedPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'src', 'sd_inference.py');
+      log(`[Generate] Checking unpacked path: ${unpackedPath}`);
+      
+      if (fs.existsSync(unpackedPath)) {
+        scriptPath = unpackedPath;
+        log(`[Generate] Found script at unpacked location`);
+      } else {
+        // Script not unpacked - copy it to a location Python can access
+        log(`[Generate] Script not at unpacked location, will copy from asar`);
+        
+        // Try to read from asar (Electron can read asar)
+        const asarPath = path.join(__dirname, 'sd_inference.py');
+        log(`[Generate] Checking asar path: ${asarPath}`);
+        
+        if (fs.existsSync(asarPath)) {
+          // Copy script to image-ai directory where Python can access it
+          const copyPath = path.join(IMAGE_AI_DIR, 'sd_inference.py');
+          try {
+            const scriptContent = fs.readFileSync(asarPath, 'utf8');
+            fs.writeFileSync(copyPath, scriptContent, 'utf8');
+            scriptPath = copyPath;
+            log(`[Generate] Copied script to: ${copyPath}`);
+          } catch (copyErr) {
+            log(`[Generate] Failed to copy script: ${copyErr.message}`);
+          }
+        }
+      }
+    } else {
+      // Development mode - script is directly accessible
+      const possiblePaths = [
+        path.join(__dirname, 'sd_inference.py'),
+        path.join(process.cwd(), 'src', 'sd_inference.py')
+      ];
+      
+      for (const p of possiblePaths) {
+        if (fs.existsSync(p)) {
+          scriptPath = p;
+          log(`[Generate] Found script in dev mode: ${p}`);
+          break;
+        }
       }
     }
     
     if (!scriptPath) {
-      log(`[Generate] Script not found in: ${possiblePaths.join(', ')}`);
-      resolve({ success: false, error: 'Inference script not found' });
+      const msg = app.isPackaged 
+        ? `Inference script not found. Check that sd_inference.py is in asarUnpack config.`
+        : `Inference script not found in development paths`;
+      log(`[Generate] ${msg}`);
+      resolve({ success: false, error: msg });
       return;
     }
     
