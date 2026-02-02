@@ -2654,40 +2654,17 @@ async function installPythonDeps() {
     });
   };
   
-  // Step 1: Install ONNX Runtime with GPU support
-  // ONNX Runtime GPU comes as pre-built binaries - no DLL issues like PyTorch
-  log('[Deps] Step 1/2: Installing ONNX Runtime with GPU support...');
-  if (mainWindow) {
-    mainWindow.webContents.send('image-ai-deps-progress', 'Installing ONNX Runtime GPU...');
-  }
-  
-  try {
-    // onnxruntime-gpu includes CUDA support with bundled DLLs
-    await runPipInstall(['onnxruntime-gpu']);
-    log('[Deps] ONNX Runtime GPU installed successfully');
-  } catch (err) {
-    // Fall back to CPU-only if GPU fails
-    log('[Deps] ONNX Runtime GPU failed, trying CPU version...');
-    if (mainWindow) {
-      mainWindow.webContents.send('image-ai-deps-progress', 'Installing ONNX Runtime (CPU)...');
-    }
-    await runPipInstall(['onnxruntime']);
-    log('[Deps] ONNX Runtime CPU installed successfully');
-  }
-  
-  // Step 2: Install diffusers with ONNX support and other dependencies
-  log('[Deps] Step 2/2: Installing diffusers and dependencies...');
+  // Step 1: Install diffusers with ONNX support and other dependencies
+  log('[Deps] Step 1/2: Installing diffusers and dependencies...');
   if (mainWindow) {
     mainWindow.webContents.send('image-ai-deps-progress', 'Installing diffusers and dependencies...');
   }
   
-  // Install packages WITHOUT onnxruntime (we already installed GPU version)
-  // Using optimum WITHOUT the [onnxruntime] extra to avoid overwriting GPU version
-  const packages = [
+  // Install base packages first (without optimum to control ONNX version)
+  const basePackages = [
     'torch',
     'diffusers',
     'transformers',
-    'optimum',  // Just optimum, not optimum[onnxruntime] - we already have GPU version!
     'accelerate',
     'safetensors',
     'numpy',
@@ -2695,19 +2672,29 @@ async function installPythonDeps() {
     'scipy'
   ];
   
-  await runPipInstall(packages);
+  await runPipInstall(basePackages);
   
-  // Reinstall onnxruntime-gpu at the END to ensure it's not overwritten
-  log('[Deps] Ensuring ONNX Runtime GPU is installed (reinstalling to be safe)...');
+  // Step 2: Install optimum with onnxruntime-gpu
+  // This package installs BOTH optimum's ONNX integration AND onnxruntime-gpu together
+  log('[Deps] Step 2/2: Installing optimum with GPU ONNX Runtime...');
   if (mainWindow) {
-    mainWindow.webContents.send('image-ai-deps-progress', 'Ensuring GPU acceleration...');
+    mainWindow.webContents.send('image-ai-deps-progress', 'Installing optimum with GPU acceleration...');
   }
+  
   try {
-    await runPipInstall(['onnxruntime-gpu', '--force-reinstall', '--no-deps']);
-    log('[Deps] ONNX Runtime GPU verified');
+    // optimum[onnxruntime-gpu] installs optimum with CUDA-enabled onnxruntime
+    await runPipInstall(['optimum[onnxruntime-gpu]']);
+    log('[Deps] Optimum with ONNX Runtime GPU installed successfully');
   } catch (err) {
-    log('[Deps] ONNX Runtime GPU reinstall failed, continuing with existing version');
+    // Fall back to CPU-only if GPU fails
+    log('[Deps] GPU version failed, trying CPU version...');
+    if (mainWindow) {
+      mainWindow.webContents.send('image-ai-deps-progress', 'Installing optimum (CPU fallback)...');
+    }
+    await runPipInstall(['optimum[onnxruntime]']);
+    log('[Deps] Optimum with ONNX Runtime CPU installed');
   }
+  
   log('[Deps] All dependencies installed successfully');
 }
 
