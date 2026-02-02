@@ -782,7 +782,7 @@ async function callEmbeddedSdGenerate(prompt, width, height, seed, tileX, tileY,
       seed: seed,
       width: width,
       height: height,
-      model_path: SD_MODEL_PATH,
+      model_dir: SD_ONNX_MODEL_DIR,
       is_benchmark: false,
       tile_x: tileX,
       tile_y: tileY,
@@ -968,7 +968,7 @@ async function processTask(task) {
       if (!isEmbeddedSdReady()) {
         log('[Image Task] ERROR: Image AI is not ready!');
         log(`[Image Task] Python exists: ${fs.existsSync(PYTHON_EXE)}`);
-        log(`[Image Task] Model exists: ${fs.existsSync(SD_MODEL_PATH)}`);
+        log(`[Image Task] Model exists: ${fs.existsSync(SD_ONNX_MODEL_INDEX)}`);
         throw new Error('Image AI not ready - Python or model not installed');
       }
       
@@ -1127,7 +1127,7 @@ async function mainLoop() {
   log(`API Key: ${API_KEY ? API_KEY.substring(0, 10) + '...' : 'NOT SET'}`);
   log(`Log file: ${LOG_FILE}`);
   log(`Image AI paths: userData=${USER_DATA_DIR}, ai=${IMAGE_AI_DIR}`);
-  log(`Image AI ready: Python=${fs.existsSync(PYTHON_EXE)}, Model=${fs.existsSync(SD_MODEL_PATH)}`);
+  log(`Image AI ready: Python=${fs.existsSync(PYTHON_EXE)}, Model=${fs.existsSync(SD_ONNX_MODEL_INDEX)}`);
   
   if (!API_KEY) {
     log('ERROR: API key not configured');

@@ -64,15 +64,20 @@ def main():
         use_cuda = 'CUDAExecutionProvider' in providers
         use_dml = 'DmlExecutionProvider' in providers
         
+        # Log all available providers for debugging
+        log(f"CUDA available: {use_cuda}, DirectML available: {use_dml}")
+        
         if use_cuda:
+            # CUDA is preferred for NVIDIA GPUs - should be ~3-5 seconds
             provider = 'CUDAExecutionProvider'
-            log("Using CUDA acceleration")
+            log("Using CUDA acceleration (NVIDIA GPU)")
         elif use_dml:
+            # DirectML works on any Windows GPU without CUDA toolkit
             provider = 'DmlExecutionProvider'
-            log("Using DirectML acceleration (Windows)")
+            log("Using DirectML acceleration (Windows GPU)")
         else:
             provider = 'CPUExecutionProvider'
-            log("Using CPU (this will be slow)")
+            log("WARNING: Using CPU only - this will be VERY slow (30+ seconds)")
         
         log("Loading Stable Diffusion ONNX pipeline via Optimum...")
         

@@ -2681,11 +2681,13 @@ async function installPythonDeps() {
     mainWindow.webContents.send('image-ai-deps-progress', 'Installing diffusers and dependencies...');
   }
   
+  // Install packages WITHOUT onnxruntime (we already installed GPU version)
+  // Using optimum WITHOUT the [onnxruntime] extra to avoid overwriting GPU version
   const packages = [
     'torch',
     'diffusers',
     'transformers',
-    'optimum[onnxruntime]',
+    'optimum',  // Just optimum, not optimum[onnxruntime] - we already have GPU version!
     'accelerate',
     'safetensors',
     'numpy',
@@ -2694,6 +2696,18 @@ async function installPythonDeps() {
   ];
   
   await runPipInstall(packages);
+  
+  // Reinstall onnxruntime-gpu at the END to ensure it's not overwritten
+  log('[Deps] Ensuring ONNX Runtime GPU is installed (reinstalling to be safe)...');
+  if (mainWindow) {
+    mainWindow.webContents.send('image-ai-deps-progress', 'Ensuring GPU acceleration...');
+  }
+  try {
+    await runPipInstall(['onnxruntime-gpu', '--force-reinstall', '--no-deps']);
+    log('[Deps] ONNX Runtime GPU verified');
+  } catch (err) {
+    log('[Deps] ONNX Runtime GPU reinstall failed, continuing with existing version');
+  }
   log('[Deps] All dependencies installed successfully');
 }
 
