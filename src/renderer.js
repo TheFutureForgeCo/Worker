@@ -581,9 +581,9 @@ function updateImageAiUI(status) {
       }
     }
     
-    // Show/hide retry button
+    // Always show re-run button when Image AI is installed (for manual retesting)
     if (retryBenchmarkBtn) {
-      retryBenchmarkBtn.style.display = showRetryBtn ? 'block' : 'none';
+      retryBenchmarkBtn.style.display = 'block';
     }
   }
   
@@ -808,7 +808,7 @@ if (resumeImageAiBtn) {
 // Retry Benchmark button
 if (retryBenchmarkBtn) {
   retryBenchmarkBtn.addEventListener('click', async () => {
-    console.log('[Renderer] Retry benchmark requested');
+    console.log('[Renderer] Re-run benchmark requested');
     
     // Disable button and show loading state
     retryBenchmarkBtn.disabled = true;
@@ -823,19 +823,18 @@ if (retryBenchmarkBtn) {
       console.log('[Renderer] Benchmark result:', result);
       
       if (result.success) {
-        // Success - UI will update via status change
-        retryBenchmarkBtn.textContent = 'Retry';
-        retryBenchmarkBtn.style.display = 'none';
+        // Success - UI will update via status change, keep button visible for re-testing
+        retryBenchmarkBtn.textContent = 'Re-run';
       } else {
-        // Failed - show error and keep retry button visible
-        retryBenchmarkBtn.textContent = 'Retry';
+        // Failed - show error
+        retryBenchmarkBtn.textContent = 'Re-run';
         if (benchmarkResult) {
           benchmarkResult.textContent = `Error: ${result.error}`;
         }
       }
     } catch (err) {
-      console.error('[Renderer] Benchmark retry failed:', err);
-      retryBenchmarkBtn.textContent = 'Retry';
+      console.error('[Renderer] Benchmark re-run failed:', err);
+      retryBenchmarkBtn.textContent = 'Re-run';
       if (benchmarkResult) {
         benchmarkResult.textContent = `Error: ${err.message}`;
       }

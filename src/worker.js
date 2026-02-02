@@ -710,37 +710,27 @@ let sdServerReady = false;
 const USER_DATA_DIR = process.env.CG_USER_DATA || path.join(os.homedir(), '.computegrid');
 const IMAGE_AI_DIR = path.join(USER_DATA_DIR, 'image-ai');
 const PYTHON_DIR = path.join(IMAGE_AI_DIR, 'python');
-const SD_MODEL_PATH = path.join(IMAGE_AI_DIR, 'sd-v1-5.safetensors');
+const SD_ONNX_MODEL_DIR = path.join(IMAGE_AI_DIR, 'sd-onnx');
+const SD_ONNX_MODEL_INDEX = path.join(SD_ONNX_MODEL_DIR, 'model_index.json');
 const PYTHON_EXE = process.platform === 'win32'
   ? path.join(PYTHON_DIR, 'python', 'python.exe')
   : path.join(PYTHON_DIR, 'bin', 'python3');
 
-// Check if embedded SD is ready (Python + model installed)
+// Check if embedded SD is ready (Python + ONNX model installed)
 function isEmbeddedSdReady() {
   const pythonExists = fs.existsSync(PYTHON_EXE);
-  const modelExists = fs.existsSync(SD_MODEL_PATH);
+  const modelIndexExists = fs.existsSync(SD_ONNX_MODEL_INDEX);
   
   if (!pythonExists) {
     log(`Embedded SD not ready: Python not found at ${PYTHON_EXE}`);
     return false;
   }
-  if (!modelExists) {
-    log(`Embedded SD not ready: Model not found at ${SD_MODEL_PATH}`);
+  if (!modelIndexExists) {
+    log(`Embedded SD not ready: ONNX model not found at ${SD_ONNX_MODEL_DIR}`);
     return false;
   }
   
-  // Check model file size (should be > 4GB)
-  try {
-    const stats = fs.statSync(SD_MODEL_PATH);
-    if (stats.size < 4000000000) {
-      log(`Embedded SD not ready: Model too small (${stats.size} bytes)`);
-      return false;
-    }
-  } catch (e) {
-    log(`Embedded SD not ready: Error checking model: ${e.message}`);
-    return false;
-  }
-  
+  log(`Embedded SD ready: ONNX model found at ${SD_ONNX_MODEL_DIR}`);
   return true;
 }
 

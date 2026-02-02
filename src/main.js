@@ -1985,12 +1985,29 @@ async function checkAndRunBenchmarkIfNeeded() {
   }
   
   // Need to run benchmark!
+  // Run twice: first to warm up/cache model, second for accurate score
   log('[ImageAI] No valid benchmark found, running benchmark now...');
+  log('[ImageAI] First run (warming up model cache)...');
   
   // Notify UI
   if (mainWindow) {
     mainWindow.webContents.send('image-ai-phase', 'benchmark');
     mainWindow.webContents.send('image-ai-benchmark-start');
+    mainWindow.webContents.send('image-ai-deps-progress', 'Benchmark run 1/2 (warming up model)...');
+  }
+  
+  // First run - warm up cache
+  const warmupResult = await runBenchmark();
+  if (!warmupResult.success) {
+    log(`[ImageAI] Warmup benchmark failed: ${warmupResult.error}`);
+  } else {
+    log(`[ImageAI] Warmup completed: ${warmupResult.time}ms (not used for tier)`);
+  }
+  
+  // Second run - actual benchmark with cached model
+  log('[ImageAI] Second run (actual benchmark with cached model)...');
+  if (mainWindow) {
+    mainWindow.webContents.send('image-ai-deps-progress', 'Benchmark run 2/2 (measuring real performance)...');
   }
   
   const benchResult = await runBenchmark();
