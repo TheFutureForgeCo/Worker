@@ -2704,12 +2704,13 @@ async function installPythonDeps() {
   }
   
   // Install other packages (without torch since we installed it above)
+  // IMPORTANT: numpy must be <2 for onnxruntime-gpu 1.16.3 compatibility
   const basePackages = [
+    'numpy<2',  // Pin numpy to <2 for onnxruntime-gpu compatibility
     'diffusers',
     'transformers',
     'accelerate',
     'safetensors',
-    'numpy',
     'Pillow',
     'scipy'
   ];
@@ -2724,12 +2725,8 @@ async function installPythonDeps() {
   }
   
   try {
-    // First install optimum WITHOUT onnxruntime to get the package structure
-    await runPipInstall(['optimum']);
-    log('[Deps] Optimum base package installed');
-    
-    // Step 4: Uninstall any existing onnxruntime (CPU version) to prevent conflicts
-    log('[Deps] Step 4/5: Removing CPU ONNX Runtime if present...');
+    // Step 4: Uninstall any existing onnxruntime (CPU version) to prevent conflicts FIRST
+    log('[Deps] Step 4/6: Removing CPU ONNX Runtime if present...');
     if (mainWindow) {
       mainWindow.webContents.send('image-ai-deps-progress', 'Removing CPU runtime (if any)...');
     }
@@ -2743,12 +2740,24 @@ async function installPythonDeps() {
     }
     
     // Step 5: Install onnxruntime-gpu FRESH (no conflicts)
-    log('[Deps] Step 5/5: Installing ONNX Runtime GPU...');
+    log('[Deps] Step 5/6: Installing ONNX Runtime GPU...');
     if (mainWindow) {
       mainWindow.webContents.send('image-ai-deps-progress', 'Installing CUDA ONNX Runtime...');
     }
     await runPipInstall(['onnxruntime-gpu==1.16.3']);  // Pin to known working version
     log('[Deps] ONNX Runtime GPU installed successfully');
+    
+    // Step 6: Install optimum WITH onnxruntime integration (no-deps to avoid CPU runtime reinstall)
+    log('[Deps] Step 6/6: Installing optimum with ONNX Runtime integration...');
+    if (mainWindow) {
+      mainWindow.webContents.send('image-ai-deps-progress', 'Installing optimum onnxruntime integration...');
+    }
+    // Install optimum[onnxruntime] but use --no-deps to avoid reinstalling CPU onnxruntime
+    // Then let it install just optimum core packages
+    await runPipInstall(['optimum[onnxruntime]'], ['--no-deps']);
+    // Now install optimum's other dependencies without the onnxruntime dep
+    await runPipInstall(['optimum']);
+    log('[Deps] Optimum with ONNX Runtime integration installed');
   } catch (err) {
     // Fall back to CPU-only if GPU fails
     log('[Deps] GPU version failed, trying CPU version...');

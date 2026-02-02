@@ -80,6 +80,7 @@ const toggleBenchmarkLogsBtn = document.getElementById('toggleBenchmarkLogsBtn')
 const benchmarkLogsContainer = document.getElementById('benchmarkLogsContainer');
 const benchmarkLogsContent = document.getElementById('benchmarkLogsContent');
 const clearBenchmarkLogsBtn = document.getElementById('clearBenchmarkLogsBtn');
+const copyBenchmarkLogsBtn = document.getElementById('copyBenchmarkLogsBtn');
 
 // DOM Elements - Image AI Warning Modal
 const imageAiWarningModal = document.getElementById('imageAiWarningModal');
@@ -94,6 +95,7 @@ const openGithubBtn = document.getElementById('openGithubBtn');
 const viewLogsBtn = document.getElementById('viewLogsBtn');
 const logsBackBtn = document.getElementById('logsBackBtn');
 const refreshLogsBtn = document.getElementById('refreshLogsBtn');
+const copyLogsBtn = document.getElementById('copyLogsBtn');
 const openLogsFolderBtn = document.getElementById('openLogsFolderBtn');
 const logsContent = document.getElementById('logsContent');
 const logsPath = document.getElementById('logsPath');
@@ -883,6 +885,53 @@ if (clearBenchmarkLogsBtn) {
   });
 }
 
+// Copy benchmark logs to clipboard
+if (copyBenchmarkLogsBtn) {
+  copyBenchmarkLogsBtn.addEventListener('click', async () => {
+    if (benchmarkLogsContent && benchmarkLogsContent.textContent) {
+      try {
+        await navigator.clipboard.writeText(benchmarkLogsContent.textContent);
+        const originalText = copyBenchmarkLogsBtn.textContent;
+        copyBenchmarkLogsBtn.textContent = 'Copied!';
+        copyBenchmarkLogsBtn.style.color = '#0f0';
+        setTimeout(() => {
+          copyBenchmarkLogsBtn.textContent = originalText;
+          copyBenchmarkLogsBtn.style.color = '#0af';
+        }, 1500);
+      } catch (err) {
+        console.error('Failed to copy:', err);
+        copyBenchmarkLogsBtn.textContent = 'Failed';
+        setTimeout(() => {
+          copyBenchmarkLogsBtn.textContent = 'Copy';
+          copyBenchmarkLogsBtn.style.color = '#0af';
+        }, 1500);
+      }
+    }
+  });
+}
+
+// Copy general logs to clipboard
+if (copyLogsBtn) {
+  copyLogsBtn.addEventListener('click', async () => {
+    if (logsContent && logsContent.textContent) {
+      try {
+        await navigator.clipboard.writeText(logsContent.textContent);
+        const originalText = copyLogsBtn.textContent;
+        copyLogsBtn.innerHTML = '&#10003; Copied';
+        setTimeout(() => {
+          copyLogsBtn.innerHTML = '&#128203; Copy';
+        }, 1500);
+      } catch (err) {
+        console.error('Failed to copy:', err);
+        copyLogsBtn.textContent = 'Failed';
+        setTimeout(() => {
+          copyLogsBtn.innerHTML = '&#128203; Copy';
+        }, 1500);
+      }
+    }
+  });
+}
+
 // Listen for benchmark logs from main process
 if (window.electronAPI.onBenchmarkLog) {
   window.electronAPI.onBenchmarkLog((logLine) => {
@@ -1085,13 +1134,18 @@ if (window.electronAPI.onImageAiBenchmarkError) {
       downloadImageAiBtn.style.display = 'flex';
     }
     if (imageAiDownloadStatus) {
-      // Show full error message for debugging
-      imageAiDownloadStatus.textContent = `Benchmark failed: ${error}`;
-      imageAiDownloadStatus.style.wordBreak = 'break-word';
-      imageAiDownloadStatus.style.whiteSpace = 'normal';
-      imageAiDownloadStatus.style.maxHeight = '200px';
-      imageAiDownloadStatus.style.overflowY = 'auto';
+      // Show shortened error in status, point user to logs for full details
+      const shortError = error.length > 80 ? error.substring(0, 80) + '...' : error;
+      imageAiDownloadStatus.textContent = `Benchmark failed - See logs for details`;
+      imageAiDownloadStatus.style.color = '#f44';
     }
+    
+    // Add full error to benchmark logs for easy copying
+    if (benchmarkLogsContent) {
+      benchmarkLogsContent.textContent += '\n=== FULL ERROR ===\n' + error + '\n==================\n';
+      benchmarkLogsContent.scrollTop = benchmarkLogsContent.scrollHeight;
+    }
+    
     // Show benchmark status and logs button even on error
     if (imageBenchmarkStatus) {
       imageBenchmarkStatus.style.display = 'flex';
@@ -1101,6 +1155,13 @@ if (window.electronAPI.onImageAiBenchmarkError) {
     }
     if (retryBenchmarkBtn) {
       retryBenchmarkBtn.style.display = 'inline-block';
+    }
+    // Auto-show logs panel when error occurs
+    if (benchmarkLogsContainer) {
+      benchmarkLogsContainer.style.display = 'block';
+    }
+    if (toggleBenchmarkLogsBtn) {
+      toggleBenchmarkLogsBtn.textContent = 'Hide';
     }
   });
 }
