@@ -157,6 +157,7 @@ def main():
         pipe = None
         actual_provider = None
         provider_verified = False
+        nsfw_filter_disabled = False
         
         # Try each provider in order until one works
         for provider_name, provider_desc in providers_to_try:
@@ -228,6 +229,16 @@ def main():
         
         provider = actual_provider or provider
         log(f"Pipeline loaded successfully with {provider}")
+        
+        # Disable NSFW safety checker to prevent black images
+        # The safety checker replaces "inappropriate" content with black images
+        if hasattr(pipe, 'safety_checker') and pipe.safety_checker is not None:
+            log("Disabling NSFW safety checker (causes black images for filtered content)")
+            pipe.safety_checker = None
+            nsfw_filter_disabled = True
+        if hasattr(pipe, 'feature_extractor'):
+            pipe.feature_extractor = None
+        log(f"Safety checker status: {'Disabled' if nsfw_filter_disabled else 'Not present'}")
         
         pipeline_load_time = time.time() - pipeline_load_start
         log(f"Pipeline loaded in {pipeline_load_time:.2f}s")
@@ -344,6 +355,7 @@ def main():
             "total_time_ms": int(total_time * 1000),
             "provider": provider,
             "provider_verified": provider_verified,
+            "nsfw_filter_disabled": nsfw_filter_disabled,
             "image_stats": {
                 "min": int(img_min),
                 "max": int(img_max),
@@ -358,6 +370,7 @@ def main():
             log("  1. ONNX model not properly loaded")
             log("  2. Wrong execution provider")
             log("  3. Corrupted model files - try redownloading")
+            log("  4. Safety checker blocked the image (should be disabled)")
             result["warning"] = "Image appears blank - may indicate model issue"
         
         print(json.dumps(result))
