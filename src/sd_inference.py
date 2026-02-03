@@ -24,6 +24,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 import json
 import time
 import base64
+import torch
 from io import BytesIO
 
 def log(message):
