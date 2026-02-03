@@ -1239,6 +1239,16 @@ if (window.electronAPI.onImageAiBenchmarkComplete) {
     if (imageAiStatus && imageAiEnabled) {
       imageAiStatus.textContent = `Enabled - ${data.tier} tier`;
     }
+    
+    // Show re-run benchmark button and logs button after single benchmark completes
+    if (retryBenchmarkBtn) {
+      retryBenchmarkBtn.style.display = 'inline-block';
+      retryBenchmarkBtn.disabled = false;
+      retryBenchmarkBtn.textContent = 'Re-run';
+    }
+    if (toggleBenchmarkLogsBtn) {
+      toggleBenchmarkLogsBtn.style.display = 'inline-block';
+    }
   });
 }
 
@@ -1301,6 +1311,16 @@ if (window.electronAPI.onImageAiDualBenchmarkComplete) {
     // Update the status text
     if (imageAiStatus && imageAiEnabled) {
       imageAiStatus.textContent = `Enabled - ${data.tier} tier`;
+    }
+    
+    // Show re-run benchmark button after benchmark completes
+    if (retryBenchmarkBtn) {
+      retryBenchmarkBtn.style.display = 'inline-block';
+      retryBenchmarkBtn.disabled = false;
+      retryBenchmarkBtn.textContent = 'Re-run';
+    }
+    if (toggleBenchmarkLogsBtn) {
+      toggleBenchmarkLogsBtn.style.display = 'inline-block';
     }
   });
 }
@@ -1657,6 +1677,11 @@ async function loadChatHistory() {
     
     renderChatMessages();
     renderSidebar();
+    
+    // Re-add thinking indicator if still generating (user switched tabs and came back)
+    if (isGeneratingChat) {
+      addThinkingIndicator();
+    }
   } catch (err) {
     console.error('Failed to load chat history:', err);
     conversations = [];
@@ -1745,9 +1770,12 @@ function formatChatContent(content) {
 
 // Add thinking indicator
 function addThinkingIndicator() {
+  // Don't add duplicate thinking indicators
+  if (document.getElementById('chatThinking')) return;
+  
   const thinkingHtml = `
     <div class="chat-message assistant" id="chatThinking">
-      <div class="chat-message-avatar">AI</div>
+      <div class="chat-message-avatar">🤖</div>
       <div class="chat-message-content">
         <div class="chat-thinking">
           <span></span><span></span><span></span>

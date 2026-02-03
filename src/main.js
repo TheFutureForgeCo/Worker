@@ -562,10 +562,10 @@ function saveConfig() {
 // Create the main window
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 480,
-    height: 700,
-    minWidth: 420,
-    minHeight: 600,
+    width: 600,
+    height: 800,
+    minWidth: 500,
+    minHeight: 650,
     resizable: true,
     frame: false,
     titleBarStyle: 'hidden',
@@ -3949,12 +3949,13 @@ async function generateImage(params) {
     }
     
     const modelId = use_sdxl ? SDXL_ONNX_MODEL_ID : SD_ONNX_MODEL_ID;
+    const modelDir = use_sdxl ? SDXL_MODEL_DIR : SD_MODEL_DIR;
     const inputData = JSON.stringify({
       prompt,
       seed: seed || 42,
       width: width || 512,
       height: height || 512,
-      model_dir: SD_MODEL_DIR,
+      model_dir: modelDir,
       model_id: modelId,
       use_sdxl: use_sdxl || false,
       is_benchmark: is_benchmark || false,
