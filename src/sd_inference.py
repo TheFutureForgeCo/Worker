@@ -102,6 +102,10 @@ def main():
         output_path = input_data.get("output_path", "")
         is_benchmark = input_data.get("is_benchmark", False)
         
+        # Default negative prompt for better quality - avoids common SD 1.5 artifacts
+        default_negative = "blurry, low quality, distorted, deformed, ugly, bad anatomy, disfigured, poorly drawn, extra limbs, mutated, grainy, noisy, watermark, text, logo"
+        negative_prompt = input_data.get("negative_prompt", default_negative)
+        
         # CRITICAL: Round dimensions to multiple of 8 for ONNX compatibility
         # ONNX models require dimensions divisible by 8 to avoid tensor shape mismatches
         original_width, original_height = width, height
@@ -279,9 +283,10 @@ def main():
         generator.manual_seed(seed)
         log(f"Random seed set: {seed}")
         
-        num_steps = 20 if is_benchmark else 25
+        num_steps = 20 if is_benchmark else 35
         log(f"Inference steps: {num_steps}")
         log(f"Guidance scale: 7.5")
+        log(f"Negative prompt: {negative_prompt[:50]}...")
         
         gen_start = time.time()
         log("Starting inference...")
@@ -291,6 +296,7 @@ def main():
         try:
             result = pipe(
                 prompt,
+                negative_prompt=negative_prompt,
                 width=width,
                 height=height,
                 num_inference_steps=num_steps,
@@ -301,6 +307,7 @@ def main():
             log(f"Generator parameter not supported, running without it: {e}")
             result = pipe(
                 prompt,
+                negative_prompt=negative_prompt,
                 width=width,
                 height=height,
                 num_inference_steps=num_steps,
