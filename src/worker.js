@@ -556,10 +556,13 @@ async function setupOllama() {
         // Try the smaller model first (faster download)
         const pulled = await pullOllamaModel(FALLBACK_MODEL);
         if (pulled) {
-          activeModel = FALLBACK_MODEL;
-          ollamaReady = true;
-          log(`Ollama ready with pulled model: ${activeModel}`);
-          return true;
+          // Verify model was actually pulled by checking again
+          const verifyReady = await checkOllama();
+          if (verifyReady) {
+            log(`Ollama ready with verified model: ${activeModel}`);
+            return true;
+          }
+          log('Model pull reported success but verification failed');
         }
       }
     } catch (err) {
@@ -797,11 +800,17 @@ function isEmbeddedSdReady() {
   return isReady;
 }
 
-// Find the SD inference script path (with caching to avoid repeated lookups)
-function getSdInferenceScriptPath() {
-  // Return cached path if available and still exists
-  if (cachedSdScriptPath && fs.existsSync(cachedSdScriptPath)) {
+// Find the SD inference script path (with caching and cache invalidation)
+function getSdInferenceScriptPath(forceRefresh = false) {
+  // Return cached path if available and still exists (unless refresh forced)
+  if (!forceRefresh && cachedSdScriptPath && fs.existsSync(cachedSdScriptPath)) {
     return cachedSdScriptPath;
+  }
+  
+  // Clear cache if forced refresh or cached path no longer exists
+  if (cachedSdScriptPath && !fs.existsSync(cachedSdScriptPath)) {
+    log(`Cached SD script path no longer exists, re-scanning...`);
+    cachedSdScriptPath = null;
   }
   
   // Build list of possible paths - prioritize packaged app locations
@@ -838,15 +847,27 @@ function getSdInferenceScriptPath() {
   return null;
 }
 
+// Invalidate SD script cache (called when bundle is installed)
+function invalidateSdScriptCache() {
+  cachedSdScriptPath = null;
+  log('SD script cache invalidated');
+}
+
 // Generate image using embedded Python + diffusers
 async function callEmbeddedSdGenerate(prompt, width, height, seed, tileX, tileY, totalTilesX, totalTilesY, tileOverlap) {
   return new Promise((resolve, reject) => {
     const { spawn } = require('child_process');
     
-    const scriptPath = getSdInferenceScriptPath();
+    // Try to get script path, with retry on failure
+    let scriptPath = getSdInferenceScriptPath();
     if (!scriptPath) {
-      reject(new Error('SD inference script not found'));
-      return;
+      // Force refresh in case script was installed after initial check
+      log('SD script not found, trying force refresh...');
+      scriptPath = getSdInferenceScriptPath(true);
+      if (!scriptPath) {
+        reject(new Error('SD inference script not found'));
+        return;
+      }
     }
     
     // Adjust the prompt for regional generation (tiling hint)
