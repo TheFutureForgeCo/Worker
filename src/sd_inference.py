@@ -355,7 +355,8 @@ def main():
         log("=" * 60)
         
         # Check if image is blank (indicates a problem)
-        is_blank = (img_max - img_min) < 5
+        # Convert to native Python bool for JSON serialization
+        is_blank = bool((img_max - img_min) < 5)
         
         result = {
             "success": True,
