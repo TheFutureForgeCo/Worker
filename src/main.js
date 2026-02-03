@@ -2372,35 +2372,67 @@ ipcMain.handle('local-image-generate', async (event, prompt) => {
     // Get Python executable and script paths
     const pythonExe = aiPaths.pythonExe;
     const scriptPath = aiPaths.imageGenScript || getSourcePath('sd_inference.py');
-    const modelPath = aiPaths.sdModelPath;
+    const modelPath = aiPaths.sdModelPath || SD_MODEL_DIR;
     
-    // Run the inference script
+    // Run the inference script with JSON input (same format as generateImage)
     const result = await new Promise((resolve, reject) => {
-      const args = [
-        scriptPath,
-        '--prompt', prompt,
-        '--output', outputPath,
-        '--width', '512',
-        '--height', '512',
-        '--steps', '20'
-      ];
+      const inputData = JSON.stringify({
+        prompt: prompt,
+        seed: Math.floor(Math.random() * 2147483647),
+        width: 512,
+        height: 512,
+        model_dir: modelPath,
+        is_benchmark: false,
+        output_path: outputPath
+      });
       
-      if (modelPath) {
-        args.push('--model-path', modelPath);
-      }
+      log(`[LocalImage] Running: ${pythonExe} ${scriptPath}`);
+      log(`[LocalImage] Input: ${inputData.substring(0, 100)}...`);
       
-      const proc = spawn(pythonExe, args, {
+      const proc = spawn(pythonExe, [scriptPath, inputData], {
         env: { ...process.env, PYTHONUNBUFFERED: '1' }
       });
       
+      let stdout = '';
       let stderr = '';
+      
+      proc.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+      
       proc.stderr.on('data', (data) => {
-        stderr += data.toString();
+        const msg = data.toString();
+        stderr += msg;
+        // Log progress for debugging
+        const lines = msg.split('\n').filter(l => l.trim());
+        for (const line of lines) {
+          log(`[LocalImage] ${line}`);
+        }
       });
       
       proc.on('close', (code) => {
-        if (code === 0 && fs.existsSync(outputPath)) {
-          resolve({ success: true, path: outputPath });
+        log(`[LocalImage] Process exited with code ${code}`);
+        
+        if (code === 0 && stdout.trim()) {
+          try {
+            // Parse the last line of stdout as JSON (same as generateImage)
+            const lines = stdout.trim().split('\n');
+            const jsonResult = JSON.parse(lines[lines.length - 1]);
+            
+            if (jsonResult.success) {
+              // Save the image from base64 if output_path wasn't used
+              if (jsonResult.image_base64 && !fs.existsSync(outputPath)) {
+                const imageBuffer = Buffer.from(jsonResult.image_base64, 'base64');
+                fs.writeFileSync(outputPath, imageBuffer);
+              }
+              resolve({ success: true, path: outputPath, ...jsonResult });
+            } else {
+              reject(new Error(jsonResult.error || 'Generation failed'));
+            }
+          } catch (parseErr) {
+            log(`[LocalImage] Failed to parse output: ${stdout.slice(-500)}`);
+            reject(new Error('Failed to parse generation result'));
+          }
         } else {
           reject(new Error(stderr || `Process exited with code ${code}`));
         }
