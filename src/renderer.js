@@ -941,12 +941,26 @@ if (clearBenchmarkLogsBtn) {
   });
 }
 
+// Helper function to strip ANSI escape codes from text
+function stripAnsiCodes(text) {
+  // Remove ANSI escape sequences (colors, formatting, etc.)
+  // Handles both ESC-prefixed sequences and bare bracket sequences from logs
+  // eslint-disable-next-line no-control-regex
+  return text
+    .replace(/\x1B\[[0-9;]*[A-Za-z]/g, '')  // Standard ESC[...X sequences
+    .replace(/\x1B\][^\x07]*\x07/g, '')     // OSC sequences (ESC]...BEL)
+    .replace(/\[[0-9;]*m/g, '')             // Bare bracket color codes like [0;93m, [1;34m, [39m, [m
+    .replace(/\x1B/g, '');                  // Any remaining ESC characters
+}
+
 // Copy benchmark logs to clipboard
 if (copyBenchmarkLogsBtn) {
   copyBenchmarkLogsBtn.addEventListener('click', async () => {
     if (benchmarkLogsContent && benchmarkLogsContent.textContent) {
       try {
-        await navigator.clipboard.writeText(benchmarkLogsContent.textContent);
+        // Strip ANSI escape codes and copy full text
+        const cleanText = stripAnsiCodes(benchmarkLogsContent.textContent);
+        await navigator.clipboard.writeText(cleanText);
         const originalText = copyBenchmarkLogsBtn.textContent;
         copyBenchmarkLogsBtn.textContent = 'Copied!';
         copyBenchmarkLogsBtn.style.color = '#0f0';
@@ -971,7 +985,9 @@ if (copyLogsBtn) {
   copyLogsBtn.addEventListener('click', async () => {
     if (logsContent && logsContent.textContent) {
       try {
-        await navigator.clipboard.writeText(logsContent.textContent);
+        // Strip ANSI escape codes and copy full text
+        const cleanText = stripAnsiCodes(logsContent.textContent);
+        await navigator.clipboard.writeText(cleanText);
         const originalText = copyLogsBtn.textContent;
         copyLogsBtn.innerHTML = '&#10003; Copied';
         setTimeout(() => {
