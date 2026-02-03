@@ -202,19 +202,33 @@ def main():
                     # Use pre-exported ONNX model
                     onnx_model_id = model_id if model_id else default_model_id
                     log(f"Downloading pre-exported ONNX model: {onnx_model_id}")
-                    try:
+                    
+                    # SDXL models from onnxruntime/ are already ONNX format, no revision needed
+                    # SD 1.5 from runwayml/ needs revision="onnx" to get ONNX variant
+                    is_onnx_native = onnx_model_id.startswith("onnxruntime/")
+                    
+                    if is_onnx_native:
+                        # onnxruntime/sdxl-turbo is already in ONNX format
+                        log(f"Loading native ONNX model (no revision needed)")
                         pipe = ORTPipeline.from_pretrained(
                             onnx_model_id,
-                            revision="onnx",
                             provider=provider_name
                         )
-                    except Exception as onnx_err:
-                        log(f"ONNX revision failed: {onnx_err}")
-                        pipe = ORTPipeline.from_pretrained(
-                            onnx_model_id,
-                            export=True,
-                            provider=provider_name
-                        )
+                    else:
+                        # For other models, try onnx revision first, then export
+                        try:
+                            pipe = ORTPipeline.from_pretrained(
+                                onnx_model_id,
+                                revision="onnx",
+                                provider=provider_name
+                            )
+                        except Exception as onnx_err:
+                            log(f"ONNX revision failed: {onnx_err}")
+                            pipe = ORTPipeline.from_pretrained(
+                                onnx_model_id,
+                                export=True,
+                                provider=provider_name
+                            )
                     
                     # Save for future use
                     if model_dir:
