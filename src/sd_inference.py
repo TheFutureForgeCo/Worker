@@ -133,17 +133,20 @@ def main():
         log(f"CUDA provider available: {use_cuda}")
         log(f"DirectML provider available: {use_dml}")
         
+        # Determine provider priority with fallback chain
+        # CUDA may show as "available" but fail at runtime if CUDA Toolkit not installed
+        providers_to_try = []
         if use_cuda:
-            provider = 'CUDAExecutionProvider'
-            log("SELECTED: CUDAExecutionProvider (NVIDIA GPU)")
-        elif use_dml:
-            provider = 'DmlExecutionProvider'
-            log("SELECTED: DmlExecutionProvider (Windows GPU)")
-        else:
-            provider = 'CPUExecutionProvider'
-            log("SELECTED: CPUExecutionProvider (CPU ONLY - SLOW!)")
+            providers_to_try.append(('CUDAExecutionProvider', 'NVIDIA GPU (CUDA)'))
+        if use_dml:
+            providers_to_try.append(('DmlExecutionProvider', 'Windows GPU (DirectML)'))
+        providers_to_try.append(('CPUExecutionProvider', 'CPU (SLOW!)'))
         
-        # Step 3: Load pipeline
+        # Select initial provider (may fall back later if it fails)
+        provider, provider_desc = providers_to_try[0]
+        log(f"SELECTED: {provider} ({provider_desc})")
+        
+        # Step 3: Load pipeline with provider fallback
         log("-" * 40)
         log("STEP 3: Loading Stable Diffusion Pipeline")
         log("-" * 40)
@@ -151,54 +154,94 @@ def main():
         pipeline_load_start = time.time()
         from optimum.onnxruntime import ORTStableDiffusionPipeline
         
-        if model_dir and os.path.exists(os.path.join(model_dir, "model_index.json")):
-            log(f"Loading from local ONNX model: {model_dir}")
-            pipe = ORTStableDiffusionPipeline.from_pretrained(
-                model_dir,
-                provider=provider
-            )
-            log("Local model loaded successfully")
-        else:
-            # Use pre-exported ONNX model - NO local conversion needed
-            # This downloads ready-to-use ONNX files (~2.5GB) instead of converting locally
-            log(f"Downloading pre-exported ONNX model (one-time setup)...")
-            log(f"This will download ~2.5GB of pre-converted ONNX files...")
-            
-            # Try the official ONNX branch first
-            onnx_model_id = "runwayml/stable-diffusion-v1-5"
-            
+        pipe = None
+        actual_provider = None
+        
+        # Try each provider in order until one works
+        for provider_name, provider_desc in providers_to_try:
+            log(f"Attempting to load with {provider_name}...")
             try:
-                pipe = ORTStableDiffusionPipeline.from_pretrained(
-                    onnx_model_id,
-                    revision="onnx",
-                    provider=provider
-                )
-                log(f"Loaded pre-exported ONNX model from {onnx_model_id}")
-            except Exception as onnx_err:
-                log(f"Failed to load ONNX revision: {onnx_err}")
-                log("Trying alternative: download and export (requires more memory)...")
-                pipe = ORTStableDiffusionPipeline.from_pretrained(
-                    onnx_model_id,
-                    export=True,
-                    provider=provider
-                )
-            
-            if model_dir:
-                log(f"Saving ONNX model to: {model_dir}")
-                os.makedirs(model_dir, exist_ok=True)
-                pipe.save_pretrained(model_dir)
-                log(f"ONNX model saved - future loads will be faster")
+                if model_dir and os.path.exists(os.path.join(model_dir, "model_index.json")):
+                    log(f"Loading from local ONNX model: {model_dir}")
+                    pipe = ORTStableDiffusionPipeline.from_pretrained(
+                        model_dir,
+                        provider=provider_name
+                    )
+                else:
+                    # Use pre-exported ONNX model
+                    onnx_model_id = "runwayml/stable-diffusion-v1-5"
+                    log(f"Downloading pre-exported ONNX model...")
+                    try:
+                        pipe = ORTStableDiffusionPipeline.from_pretrained(
+                            onnx_model_id,
+                            revision="onnx",
+                            provider=provider_name
+                        )
+                    except Exception as onnx_err:
+                        log(f"ONNX revision failed: {onnx_err}")
+                        pipe = ORTStableDiffusionPipeline.from_pretrained(
+                            onnx_model_id,
+                            export=True,
+                            provider=provider_name
+                        )
+                    
+                    # Save for future use
+                    if model_dir:
+                        log(f"Saving ONNX model to: {model_dir}")
+                        os.makedirs(model_dir, exist_ok=True)
+                        pipe.save_pretrained(model_dir)
+                
+                # Check if the provider is actually active
+                if hasattr(pipe, 'unet') and hasattr(pipe.unet, 'session'):
+                    session_providers = pipe.unet.session.get_providers()
+                    if provider_name in session_providers:
+                        actual_provider = provider_name
+                        log(f"SUCCESS: {provider_name} is active")
+                        break
+                    else:
+                        log(f"WARNING: {provider_name} requested but got {session_providers}")
+                        # If we got CPU when we asked for GPU, try the next provider
+                        if provider_name != 'CPUExecutionProvider' and 'CPUExecutionProvider' in session_providers:
+                            log(f"Falling back to next provider...")
+                            pipe = None
+                            continue
+                        actual_provider = session_providers[0] if session_providers else 'CPUExecutionProvider'
+                        break
+                else:
+                    actual_provider = provider_name
+                    log(f"Loaded with {provider_name} (provider verification unavailable)")
+                    break
+                    
+            except Exception as load_err:
+                log(f"Failed to load with {provider_name}: {load_err}")
+                if provider_name == 'CUDAExecutionProvider':
+                    log("CUDA failed - this usually means CUDA Toolkit is not installed.")
+                    log("Install CUDA Toolkit from https://developer.nvidia.com/cuda-downloads")
+                    log("Or the system will fall back to DirectML/CPU.")
+                pipe = None
+                continue
+        
+        if pipe is None:
+            raise Exception("Failed to load pipeline with any provider")
+        
+        provider = actual_provider or provider
+        log(f"Pipeline loaded successfully with {provider}")
         
         pipeline_load_time = time.time() - pipeline_load_start
         log(f"Pipeline loaded in {pipeline_load_time:.2f}s")
         
-        # Step 4: Verify provider is actually being used
+        # Step 4: Confirm provider status
         log("-" * 40)
-        log("STEP 4: Verifying GPU Provider")
+        log("STEP 4: Provider Status")
         log("-" * 40)
-        provider_verified = verify_provider_in_use(pipe, provider)
-        if provider_verified is False:
-            log("WARNING: GPU provider not active! May be using CPU fallback.")
+        log(f"Active provider: {provider}")
+        if provider == 'CPUExecutionProvider':
+            log("WARNING: Running on CPU only - image generation will be VERY slow!")
+            log("For faster generation, install CUDA Toolkit (NVIDIA) or use DirectML (AMD/Intel).")
+        elif provider == 'DmlExecutionProvider':
+            log("Using DirectML - good performance on Windows GPUs")
+        elif provider == 'CUDAExecutionProvider':
+            log("Using CUDA - optimal performance on NVIDIA GPUs")
         
         # Step 5: Generate image
         log("-" * 40)

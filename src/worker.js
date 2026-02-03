@@ -513,6 +513,29 @@ async function checkOllama() {
   return false;
 }
 
+// Try to pull a model via Ollama
+async function pullOllamaModel(modelName) {
+  try {
+    log(`Pulling Ollama model: ${modelName}...`);
+    const response = await makeRequest(`${OLLAMA_HOST}/api/pull`, {
+      method: 'POST',
+      timeout: 600000, // 10 minute timeout for large model downloads
+      body: { name: modelName, stream: false }
+    });
+    
+    if (response.status === 200) {
+      log(`Successfully pulled model: ${modelName}`);
+      return true;
+    } else {
+      log(`Failed to pull model ${modelName}: ${response.status}`);
+      return false;
+    }
+  } catch (err) {
+    log(`Error pulling model ${modelName}: ${err.message}`);
+    return false;
+  }
+}
+
 // Try to setup Ollama (non-fatal if it fails)
 async function setupOllama() {
   try {
@@ -522,6 +545,28 @@ async function setupOllama() {
       log('Ollama is available and ready');
       return true;
     }
+    
+    // Try to pull a model if Ollama is running but no models are available
+    try {
+      const tagsResponse = await makeRequest(`${OLLAMA_HOST}/api/tags`, { timeout: 5000 });
+      if (tagsResponse.status === 200) {
+        // Ollama is running but may not have models - try to pull one
+        log('Ollama running but no compatible models found. Attempting to pull...');
+        
+        // Try the smaller model first (faster download)
+        const pulled = await pullOllamaModel(FALLBACK_MODEL);
+        if (pulled) {
+          activeModel = FALLBACK_MODEL;
+          ollamaReady = true;
+          log(`Ollama ready with pulled model: ${activeModel}`);
+          return true;
+        }
+      }
+    } catch (err) {
+      // Ollama not running at all
+      log(`Ollama not running: ${err.message}`);
+    }
+    
     log('Ollama not available - will use simulated responses');
     ollamaReady = false;
     return false;
@@ -721,47 +766,71 @@ const IMAGE_AI_DIR = path.join(USER_DATA_DIR, 'image-ai');
 const PYTHON_DIR = path.join(IMAGE_AI_DIR, 'python');
 const SD_ONNX_MODEL_DIR = path.join(IMAGE_AI_DIR, 'sd-onnx');
 const SD_ONNX_MODEL_INDEX = path.join(SD_ONNX_MODEL_DIR, 'model_index.json');
+// python-build-standalone extracts to a 'python/' subfolder
 const PYTHON_EXE = process.platform === 'win32'
   ? path.join(PYTHON_DIR, 'python', 'python.exe')
-  : path.join(PYTHON_DIR, 'bin', 'python3');
+  : path.join(PYTHON_DIR, 'python', 'bin', 'python3');
+
+// Cache the SD inference script path to avoid repeated lookups
+let cachedSdScriptPath = null;
 
 // Check if embedded SD is ready (Python + ONNX model installed)
+// Only logs on first check or state change to reduce noise
+let lastSdReadyState = null;
 function isEmbeddedSdReady() {
   const pythonExists = fs.existsSync(PYTHON_EXE);
   const modelIndexExists = fs.existsSync(SD_ONNX_MODEL_INDEX);
+  const isReady = pythonExists && modelIndexExists;
   
-  if (!pythonExists) {
-    log(`Embedded SD not ready: Python not found at ${PYTHON_EXE}`);
-    return false;
-  }
-  if (!modelIndexExists) {
-    log(`Embedded SD not ready: ONNX model not found at ${SD_ONNX_MODEL_DIR}`);
-    return false;
+  // Only log on state change to reduce noise
+  if (isReady !== lastSdReadyState) {
+    lastSdReadyState = isReady;
+    if (!pythonExists) {
+      log(`Embedded SD not ready: Python not installed at ${PYTHON_EXE}`);
+    } else if (!modelIndexExists) {
+      log(`Embedded SD not ready: ONNX model not installed at ${SD_ONNX_MODEL_DIR}`);
+    } else {
+      log(`Embedded SD ready: ONNX model found at ${SD_ONNX_MODEL_DIR}`);
+    }
   }
   
-  log(`Embedded SD ready: ONNX model found at ${SD_ONNX_MODEL_DIR}`);
-  return true;
+  return isReady;
 }
 
-// Find the SD inference script path
+// Find the SD inference script path (with caching to avoid repeated lookups)
 function getSdInferenceScriptPath() {
-  // Try several locations
-  const possiblePaths = [
-    path.join(__dirname, 'sd_inference.py'),
-    path.join(process.cwd(), 'src', 'sd_inference.py'),
-    path.join(os.homedir(), '.computegrid', 'sd_inference.py')
-  ];
-  
-  // In packaged app, also check resources
-  if (process.resourcesPath) {
-    possiblePaths.unshift(path.join(process.resourcesPath, 'sd_inference.py'));
-    possiblePaths.unshift(path.join(process.resourcesPath, 'app.asar.unpacked', 'src', 'sd_inference.py'));
+  // Return cached path if available and still exists
+  if (cachedSdScriptPath && fs.existsSync(cachedSdScriptPath)) {
+    return cachedSdScriptPath;
   }
   
+  // Build list of possible paths - prioritize packaged app locations
+  const possiblePaths = [];
+  
+  // In packaged app, check resources first
+  if (process.resourcesPath) {
+    possiblePaths.push(path.join(process.resourcesPath, 'app.asar.unpacked', 'src', 'sd_inference.py'));
+    possiblePaths.push(path.join(process.resourcesPath, 'sd_inference.py'));
+  }
+  
+  // Current directory and source locations
+  possiblePaths.push(path.join(__dirname, 'sd_inference.py'));
+  possiblePaths.push(path.join(process.cwd(), 'src', 'sd_inference.py'));
+  
+  // User data directory fallback
+  possiblePaths.push(path.join(USER_DATA_DIR, 'sd_inference.py'));
+  possiblePaths.push(path.join(os.homedir(), '.computegrid', 'sd_inference.py'));
+  
   for (const p of possiblePaths) {
-    if (fs.existsSync(p)) {
-      log(`Found SD inference script at: ${p}`);
-      return p;
+    try {
+      if (fs.existsSync(p)) {
+        log(`Found SD inference script at: ${p}`);
+        cachedSdScriptPath = p; // Cache for future calls
+        return p;
+      }
+    } catch (err) {
+      // Skip paths that cause errors (e.g., permission issues)
+      log(`Error checking path ${p}: ${err.message}`);
     }
   }
   
@@ -870,6 +939,11 @@ async function callEmbeddedSdGenerate(prompt, width, height, seed, tileX, tileY,
   });
 }
 
+// Round dimension up to nearest multiple of 8 (required for ONNX SD models)
+function roundTo8(value) {
+  return Math.ceil(value / 8) * 8;
+}
+
 // Generate image tile using embedded Stable Diffusion
 async function generateImageTile(taskData) {
   log(`Generating image tile [${taskData.tileX},${taskData.tileY}]...`);
@@ -891,8 +965,9 @@ async function generateImageTile(taskData) {
     const tileY = taskData.tileY || 0;
     const totalTilesX = taskData.totalTilesX || 2;
     const totalTilesY = taskData.totalTilesY || 2;
-    const tileWidth = taskData.imageWidth || 512;
-    const tileHeight = taskData.imageHeight || 512;
+    // ONNX models require dimensions divisible by 8
+    const tileWidth = roundTo8(taskData.imageWidth || 512);
+    const tileHeight = roundTo8(taskData.imageHeight || 512);
     const tileOverlap = taskData.tileOverlap || 64;
     
     log(`Tile params: prompt="${prompt.substring(0, 50)}...", seed=${seed}, position=[${tileX},${tileY}], size=${tileWidth}x${tileHeight}`);
