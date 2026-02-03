@@ -778,26 +778,66 @@ const PYTHON_EXE = process.platform === 'win32'
 let cachedSdScriptPath = null;
 
 // Check if embedded SD is ready (Python + ONNX model installed)
-// Only logs on first check or state change to reduce noise
-let lastSdReadyState = null;
+// Uses persistent cache to avoid race conditions with concurrent file checks
+let sdReadyConfirmed = false;  // Once true, stays true (files won't disappear)
+let sdReadyCheckInProgress = false;  // Prevents concurrent file system checks
+let lastSdReadyLogState = null;  // For logging state changes only
+
 function isEmbeddedSdReady() {
-  const pythonExists = fs.existsSync(PYTHON_EXE);
-  const modelIndexExists = fs.existsSync(SD_ONNX_MODEL_INDEX);
-  const isReady = pythonExists && modelIndexExists;
-  
-  // Only log on state change to reduce noise
-  if (isReady !== lastSdReadyState) {
-    lastSdReadyState = isReady;
-    if (!pythonExists) {
-      log(`Embedded SD not ready: Python not installed at ${PYTHON_EXE}`);
-    } else if (!modelIndexExists) {
-      log(`Embedded SD not ready: ONNX model not installed at ${SD_ONNX_MODEL_DIR}`);
-    } else {
-      log(`Embedded SD ready: ONNX model found at ${SD_ONNX_MODEL_DIR}`);
-    }
+  // Fast path: if already confirmed ready, don't re-check files
+  // This prevents race conditions when multiple concurrent tasks check at once
+  if (sdReadyConfirmed) {
+    return true;
   }
   
-  return isReady;
+  // Prevent concurrent file system checks which can fail on Windows due to file locking
+  if (sdReadyCheckInProgress) {
+    // Another check is in progress, return cached state or false
+    return lastSdReadyLogState === true;
+  }
+  
+  sdReadyCheckInProgress = true;
+  
+  try {
+    const pythonExists = fs.existsSync(PYTHON_EXE);
+    const modelIndexExists = fs.existsSync(SD_ONNX_MODEL_INDEX);
+    const isReady = pythonExists && modelIndexExists;
+    
+    // Only log on state change to reduce noise
+    if (isReady !== lastSdReadyLogState) {
+      lastSdReadyLogState = isReady;
+      if (!pythonExists) {
+        log(`Embedded SD not ready: Python not installed at ${PYTHON_EXE}`);
+      } else if (!modelIndexExists) {
+        log(`Embedded SD not ready: ONNX model not installed at ${SD_ONNX_MODEL_DIR}`);
+      } else {
+        log(`Embedded SD ready: ONNX model found at ${SD_ONNX_MODEL_DIR}`);
+      }
+    }
+    
+    // Once confirmed ready, cache it permanently (files won't be deleted during runtime)
+    if (isReady) {
+      sdReadyConfirmed = true;
+    }
+    
+    return isReady;
+  } finally {
+    sdReadyCheckInProgress = false;
+  }
+}
+
+// Async version with retry logic for task processing
+async function waitForSdReady(maxRetries = 3, retryDelayMs = 500) {
+  for (let i = 0; i < maxRetries; i++) {
+    if (isEmbeddedSdReady()) {
+      return true;
+    }
+    if (i < maxRetries - 1) {
+      log(`SD ready check failed, retry ${i + 1}/${maxRetries} in ${retryDelayMs}ms...`);
+      await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+    }
+  }
+  return false;
 }
 
 // Find the SD inference script path (with caching and cache invalidation)
@@ -1022,9 +1062,10 @@ async function generateImageTile(taskData) {
     
     log(`Tile params: prompt="${prompt.substring(0, 50)}...", seed=${seed}, position=[${tileX},${tileY}], size=${tileWidth}x${tileHeight}`);
     
-    // Check if embedded SD is ready (Python + model)
-    if (!isEmbeddedSdReady()) {
-      log('Embedded SD not ready - returning error');
+    // Check if embedded SD is ready (Python + model) with retry logic
+    const sdReady = await waitForSdReady(3, 500);
+    if (!sdReady) {
+      log('Embedded SD not ready after retries - returning error');
       return {
         type: 'image_tile',
         tileX,
@@ -1098,9 +1139,10 @@ async function processTask(task) {
       log(`[Image Task] Processing image generation task: ${task.id}`);
       log(`[Image Task] Task data: ${JSON.stringify(taskData).substring(0, 200)}...`);
       
-      // Check if image AI is ready
-      if (!isEmbeddedSdReady()) {
-        log('[Image Task] ERROR: Image AI is not ready!');
+      // Check if image AI is ready with retry logic to handle race conditions
+      const sdReady = await waitForSdReady(3, 500);
+      if (!sdReady) {
+        log('[Image Task] ERROR: Image AI is not ready after retries!');
         log(`[Image Task] Python exists: ${fs.existsSync(PYTHON_EXE)}`);
         log(`[Image Task] Model exists: ${fs.existsSync(SD_ONNX_MODEL_INDEX)}`);
         throw new Error('Image AI not ready - Python or model not installed');
