@@ -107,8 +107,8 @@ function getAiPaths() {
     ollamaModelsDir: OLLAMA_MODELS_DIR,
     pythonDir: path.join(app.getPath('userData'), 'image-ai', 'python'),
     pythonExe: process.platform === 'win32'
-      ? path.join(app.getPath('userData'), 'image-ai', 'python', 'python.exe')
-      : path.join(app.getPath('userData'), 'image-ai', 'python', 'bin', 'python'),
+      ? path.join(app.getPath('userData'), 'image-ai', 'python', 'python', 'python.exe')
+      : path.join(app.getPath('userData'), 'image-ai', 'python', 'python', 'bin', 'python'),
     sdModelPath: path.join(app.getPath('userData'), 'image-ai', 'sd-onnx'),
     imageGenScript: null
   };
