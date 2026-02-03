@@ -340,9 +340,10 @@ async function reportCapabilities() {
     const imageAiReady = isEmbeddedSdReady();
     const canDoImages = gpuInfo.canGenerateImages && imageAiReady;
     
-    // Get image quality tier and benchmark time from environment (set by main.js)
+    // Get image quality tier and benchmark times from environment (set by main.js)
     const imageQualityTier = process.env.CG_IMAGE_QUALITY_TIER || 'none';
     const imageBenchmarkTimeMs = parseInt(process.env.CG_IMAGE_BENCHMARK_MS, 10) || 0;
+    const sdxlBenchmarkTimeMs = parseInt(process.env.CG_SDXL_BENCHMARK_MS, 10) || 0;
     
     const systemInfo = {
       hasGpu: gpuInfo.hasGpu,
@@ -355,10 +356,11 @@ async function reportCapabilities() {
       cpuCores: os.cpus().length,
       memoryGb: Math.round(os.totalmem() / (1024 * 1024 * 1024)),
       imageQualityTier: canDoImages ? imageQualityTier : 'none',
-      imageBenchmarkTimeMs: canDoImages ? imageBenchmarkTimeMs : 0
+      imageBenchmarkTimeMs: canDoImages ? imageBenchmarkTimeMs : 0,
+      sdxlBenchmarkTimeMs: canDoImages ? sdxlBenchmarkTimeMs : 0
     };
     
-    log(`Image AI status: ready=${imageAiReady}, canGenerate=${canDoImages}, tier=${imageQualityTier}, benchmarkMs=${imageBenchmarkTimeMs}`);
+    log(`Image AI status: ready=${imageAiReady}, canGenerate=${canDoImages}, tier=${imageQualityTier}, SD1.5=${imageBenchmarkTimeMs}ms, SDXL=${sdxlBenchmarkTimeMs}ms`);
     
     const response = await makeRequest(`${SERVER_URL}/api/worker/capabilities`, {
       method: 'POST',
@@ -947,7 +949,8 @@ async function callEmbeddedSdGenerate(prompt, width, height, seed, tileX, tileY,
     const fullPrompt = prompt + regionHint;
     
     // Use appropriate model based on quality setting
-    const modelId = useSDXL ? 'stabilityai/stable-diffusion-xl-base-1.0' : 'runwayml/stable-diffusion-v1-5';
+    // SDXL-Turbo is pre-exported ONNX and works with DirectML (faster: 1-4 steps vs 30)
+    const modelId = useSDXL ? 'onnxruntime/sdxl-turbo' : 'runwayml/stable-diffusion-v1-5';
     const modelDir = useSDXL ? SDXL_ONNX_MODEL_DIR : SD_ONNX_MODEL_DIR;
     
     const inputData = JSON.stringify({
@@ -966,7 +969,7 @@ async function callEmbeddedSdGenerate(prompt, width, height, seed, tileX, tileY,
       tile_overlap: tileOverlap || 64
     });
     
-    log(`[SD] Using ${useSDXL ? 'SDXL (High Quality)' : 'SD 1.5 (Standard Quality)'} model`);
+    log(`[SD] Using ${useSDXL ? 'SDXL-Turbo (High Quality)' : 'SD 1.5 (Standard Quality)'} model`);
     
     log(`[SD] Starting Python inference: ${width}x${height}, seed=${seed}`);
     

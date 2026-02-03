@@ -759,6 +759,7 @@ function sendStatusToRenderer() {
       imageAiEnabled: config.imageAiEnabled || false,
       imageAiInstalled,
       imageBenchmarkTimeMs: config.imageBenchmarkTimeMs || null,
+      sdxlBenchmarkTimeMs: config.sdxlBenchmarkTimeMs || null,
       imageQualityTier: config.imageQualityTier || 'none',
       deviceId: deviceId
     });
@@ -1537,7 +1538,8 @@ async function startWorker() {
         CG_LOG_DIR: logDir,
         CG_USER_DATA: app.getPath('userData'),  // Pass userData path for image AI
         CG_IMAGE_QUALITY_TIER: config.imageQualityTier || 'none',  // Pass image quality tier from benchmark
-        CG_IMAGE_BENCHMARK_MS: String(config.imageBenchmarkTimeMs || 0),  // Pass benchmark time
+        CG_IMAGE_BENCHMARK_MS: String(config.imageBenchmarkTimeMs || 0),  // Pass SD 1.5 benchmark time
+        CG_SDXL_BENCHMARK_MS: String(config.sdxlBenchmarkTimeMs || 0),  // Pass SDXL benchmark time
         CG_MAX_PRIVACY_MODE: config.maxPrivacyMode ? '1' : '0',  // Pass privacy mode (safety check)
         ELECTRON_RUN_AS_NODE: '1'  // Critical: tells Electron to run as Node.js
       },
@@ -1897,7 +1899,9 @@ const PYTHON_EXE = process.platform === 'win32'
 
 // ONNX model IDs from Hugging Face - will be downloaded automatically by diffusers
 const SD_ONNX_MODEL_ID = 'runwayml/stable-diffusion-v1-5';
-const SDXL_ONNX_MODEL_ID = 'stabilityai/stable-diffusion-xl-base-1.0';
+// Use SDXL-Turbo ONNX which is pre-exported and faster (1-4 steps vs 30)
+// This is the official onnxruntime pre-exported SDXL model
+const SDXL_ONNX_MODEL_ID = 'onnxruntime/sdxl-turbo';
 // The model is downloaded on first use, so we check for the model_index.json file
 const SD_MODEL_INDEX_PATH = path.join(SD_MODEL_DIR, 'model_index.json');
 const SDXL_MODEL_INDEX_PATH = path.join(SDXL_MODEL_DIR, 'model_index.json');
@@ -1999,7 +2003,7 @@ function isImageAiFullyReady() {
 // Check and auto-run benchmark if Image AI is ready but no benchmark exists
 async function checkAndRunBenchmarkIfNeeded() {
   log('[ImageAI] Checking if benchmark is needed...');
-  log(`[ImageAI] Config state: enabled=${config.imageAiEnabled}, installed=${config.imageAiInstalled}, tier=${config.imageQualityTier}, benchmarkMs=${config.imageBenchmarkTimeMs}`);
+  log(`[ImageAI] Config state: enabled=${config.imageAiEnabled}, installed=${config.imageAiInstalled}, tier=${config.imageQualityTier}, benchmarkMs=${config.imageBenchmarkTimeMs}, sdxlBenchmarkMs=${config.sdxlBenchmarkTimeMs}`);
   
   // Only check if image AI is enabled
   if (!config.imageAiEnabled) {
@@ -2013,93 +2017,150 @@ async function checkAndRunBenchmarkIfNeeded() {
     return;
   }
   
-  // Check if we already have a valid benchmark result
-  if (config.imageBenchmarkTimeMs && config.imageQualityTier && config.imageQualityTier !== 'none') {
-    log(`[ImageAI] Benchmark already exists: ${config.imageBenchmarkTimeMs}ms, tier=${config.imageQualityTier}`);
+  // Check if we already have valid benchmark results for both models
+  const hasSD15Benchmark = config.imageBenchmarkTimeMs && config.imageQualityTier && config.imageQualityTier !== 'none';
+  const hasSDXLBenchmark = config.sdxlBenchmarkTimeMs && config.sdxlBenchmarkTimeMs > 0;
+  
+  if (hasSD15Benchmark && hasSDXLBenchmark) {
+    log(`[ImageAI] Benchmarks already exist: SD1.5=${config.imageBenchmarkTimeMs}ms, SDXL=${config.sdxlBenchmarkTimeMs}ms, tier=${config.imageQualityTier}`);
     return;
   }
   
-  // Need to run benchmark!
-  // Run twice: first to warm up/cache model, second for accurate score
-  log('[ImageAI] No valid benchmark found, running benchmark now...');
-  log('[ImageAI] First run (warming up model cache)...');
+  // Need to run benchmark(s)!
+  log('[ImageAI] Running dual benchmark (SD 1.5 + SDXL-Turbo)...');
   
   // Notify UI
   if (mainWindow) {
     mainWindow.webContents.send('image-ai-phase', 'benchmark');
     mainWindow.webContents.send('image-ai-benchmark-start');
-    mainWindow.webContents.send('image-ai-deps-progress', 'Benchmark run 1/2 (warming up model)...');
   }
   
-  // First run - warm up cache
-  const warmupResult = await runBenchmark();
-  if (!warmupResult.success) {
-    log(`[ImageAI] Warmup benchmark failed: ${warmupResult.error}`);
-  } else {
-    log(`[ImageAI] Warmup completed: ${warmupResult.time}ms (not used for tier)`);
-  }
-  
-  // Second run - actual benchmark with cached model
-  log('[ImageAI] Second run (actual benchmark with cached model)...');
-  if (mainWindow) {
-    mainWindow.webContents.send('image-ai-deps-progress', 'Benchmark run 2/2 (measuring real performance)...');
-  }
-  
-  const benchResult = await runBenchmark();
-  
-  if (benchResult.success) {
-    log(`[ImageAI] Auto-benchmark completed: ${benchResult.time}ms, tier=${benchResult.tier}`);
-  } else {
-    log(`[ImageAI] Auto-benchmark failed: ${benchResult.error}`);
+  // ========== SD 1.5 Benchmark ==========
+  if (!hasSD15Benchmark) {
+    log('[ImageAI] === SD 1.5 Benchmark ===');
     
-    // Set a fallback tier based on GPU VRAM (consistent with download handler)
-    const vramGb = config.gpuVramGb || 0;
-    if (vramGb >= 8) {
-      config.imageQualityTier = 'medium'; // Allow up to 512px
-    } else if (vramGb >= 6) {
-      config.imageQualityTier = 'slow'; // 256px only
-    } else {
-      config.imageQualityTier = 'banned'; // Not enough VRAM - don't claim image tasks
-    }
-    config.imageBenchmarkTimeMs = null;
-    saveConfig();
-    
-    log(`[ImageAI] Using fallback tier: ${config.imageQualityTier} (based on ${vramGb}GB VRAM)`);
-    
-    // Report fallback tier to server (blocked in Maximum Privacy Mode)
-    if (config.apiKey && !config.maxPrivacyMode) {
-      try {
-        const response = await fetch(`${SERVER_URL}/api/worker/report-benchmark`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${config.apiKey}`
-          },
-          body: JSON.stringify({
-            deviceId: deviceId,
-            benchmarkTimeMs: 0,
-            qualityTier: config.imageQualityTier
-          })
-        });
-        if (response.ok) {
-          log('[ImageAI] Fallback tier reported to server successfully');
-        } else {
-          log('[ImageAI] Failed to report fallback tier: ' + response.status);
-        }
-      } catch (err) {
-        log('[ImageAI] Error reporting fallback tier: ' + err.message);
-      }
-    } else if (config.maxPrivacyMode) {
-      log('[ImageAI] [Privacy] Skipping benchmark report - Maximum Privacy Mode enabled');
-    }
-    
-    // Notify UI
+    // Warmup run for SD 1.5
     if (mainWindow) {
-      mainWindow.webContents.send('image-ai-benchmark-fallback', {
-        tier: config.imageQualityTier,
-        reason: benchResult.error
+      mainWindow.webContents.send('image-ai-deps-progress', 'SD 1.5 warmup (1/4)...');
+    }
+    const warmupSD15 = await runBenchmark(false);
+    if (!warmupSD15.success) {
+      log(`[ImageAI] SD 1.5 warmup failed: ${warmupSD15.error}`);
+    } else {
+      log(`[ImageAI] SD 1.5 warmup completed: ${warmupSD15.time}ms`);
+    }
+    
+    // Actual SD 1.5 benchmark
+    if (mainWindow) {
+      mainWindow.webContents.send('image-ai-deps-progress', 'SD 1.5 benchmark (2/4)...');
+    }
+    const benchSD15 = await runBenchmark(false);
+    
+    if (benchSD15.success) {
+      log(`[ImageAI] SD 1.5 benchmark completed: ${benchSD15.time}ms, tier=${benchSD15.tier}`);
+      // CRITICAL: Save the benchmark result to config (sets imageBenchmarkTimeMs and imageQualityTier)
+      await reportBenchmarkResult(benchSD15.time);
+    } else {
+      log(`[ImageAI] SD 1.5 benchmark failed: ${benchSD15.error}`);
+      handleBenchmarkFallback(benchSD15.error);
+      return;
+    }
+  }
+  
+  // ========== SDXL-Turbo Benchmark ==========
+  log('[ImageAI] === SDXL-Turbo Benchmark ===');
+  
+  // Warmup run for SDXL
+  if (mainWindow) {
+    mainWindow.webContents.send('image-ai-deps-progress', 'SDXL-Turbo warmup (3/4)...');
+  }
+  const warmupSDXL = await runBenchmark(true);
+  if (!warmupSDXL.success) {
+    log(`[ImageAI] SDXL-Turbo warmup failed: ${warmupSDXL.error}`);
+  } else {
+    log(`[ImageAI] SDXL-Turbo warmup completed: ${warmupSDXL.time}ms`);
+  }
+  
+  // Actual SDXL benchmark
+  if (mainWindow) {
+    mainWindow.webContents.send('image-ai-deps-progress', 'SDXL-Turbo benchmark (4/4)...');
+  }
+  const benchSDXL = await runBenchmark(true);
+  
+  if (benchSDXL.success) {
+    // Store SDXL benchmark time
+    config.sdxlBenchmarkTimeMs = benchSDXL.time;
+    saveConfig();
+    sendStatusToRenderer();
+    log(`[ImageAI] SDXL-Turbo benchmark completed: ${benchSDXL.time}ms`);
+    
+    // Notify UI of both benchmarks complete
+    if (mainWindow) {
+      mainWindow.webContents.send('image-ai-dual-benchmark-complete', {
+        sd15Time: config.imageBenchmarkTimeMs,
+        sdxlTime: config.sdxlBenchmarkTimeMs,
+        tier: config.imageQualityTier
       });
     }
+  } else {
+    log(`[ImageAI] SDXL-Turbo benchmark failed: ${benchSDXL.error}`);
+    // SDXL failure is non-fatal - SD 1.5 still works
+    config.sdxlBenchmarkTimeMs = null;
+    saveConfig();
+  }
+  
+  log(`[ImageAI] Dual benchmark complete: SD1.5=${config.imageBenchmarkTimeMs}ms, SDXL=${config.sdxlBenchmarkTimeMs || 'failed'}ms, tier=${config.imageQualityTier}`);
+}
+
+// Handle benchmark fallback when SD 1.5 benchmark fails
+function handleBenchmarkFallback(error) {
+  // Set a fallback tier based on GPU VRAM (consistent with download handler)
+  const vramGb = config.gpuVramGb || 0;
+  if (vramGb >= 8) {
+    config.imageQualityTier = 'medium'; // Allow up to 512px
+  } else if (vramGb >= 6) {
+    config.imageQualityTier = 'slow'; // 256px only
+  } else {
+    config.imageQualityTier = 'banned'; // Not enough VRAM - don't claim image tasks
+  }
+  config.imageBenchmarkTimeMs = null;
+  config.sdxlBenchmarkTimeMs = null;
+  saveConfig();
+  
+  log(`[ImageAI] Using fallback tier: ${config.imageQualityTier} (based on ${vramGb}GB VRAM)`);
+  
+  // Report fallback tier to server (blocked in Maximum Privacy Mode)
+  if (config.apiKey && !config.maxPrivacyMode) {
+    fetch(`${SERVER_URL}/api/worker/report-benchmark`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${config.apiKey}`
+      },
+      body: JSON.stringify({
+        deviceId: deviceId,
+        benchmarkTimeMs: 0,
+        qualityTier: config.imageQualityTier
+      })
+    }).then(response => {
+      if (response.ok) {
+        log('[ImageAI] Fallback tier reported to server successfully');
+      } else {
+        log('[ImageAI] Failed to report fallback tier: ' + response.status);
+      }
+    }).catch(err => {
+      log('[ImageAI] Error reporting fallback tier: ' + err.message);
+    });
+  } else if (config.maxPrivacyMode) {
+    log('[ImageAI] [Privacy] Skipping benchmark report - Maximum Privacy Mode enabled');
+  }
+  
+  // Notify UI
+  if (mainWindow) {
+    mainWindow.webContents.send('image-ai-benchmark-fallback', {
+      tier: config.imageQualityTier,
+      reason: error
+    });
   }
 }
 
@@ -2576,7 +2637,7 @@ ipcMain.handle('clear-local-conversations', async () => {
 
 // Retry benchmark manually from UI
 ipcMain.handle('retry-image-benchmark', async () => {
-  log('[ImageAI] Manual benchmark retry requested from UI');
+  log('[ImageAI] Manual dual benchmark retry requested from UI');
   
   // Check if Image AI is ready
   if (!isImageAiFullyReady()) {
@@ -2591,17 +2652,17 @@ ipcMain.handle('retry-image-benchmark', async () => {
   }
   
   try {
-    const benchResult = await runBenchmark();
+    // ========== SD 1.5 Benchmark ==========
+    log('[ImageAI] === Manual SD 1.5 Benchmark ===');
+    if (mainWindow) {
+      mainWindow.webContents.send('image-ai-deps-progress', 'SD 1.5 benchmark (1/2)...');
+    }
     
-    if (benchResult.success) {
-      log(`[ImageAI] Manual benchmark completed: ${benchResult.time}ms, tier=${benchResult.tier}`);
-      // Report to server - this also sets config.imageBenchmarkTimeMs and imageQualityTier
-      await reportBenchmarkResult(benchResult.time);
-      sendStatusToRenderer();
-      return { success: true, time: benchResult.time, tier: config.imageQualityTier };
-    } else {
-      const errorMsg = benchResult.error || 'Unknown benchmark error';
-      log(`[ImageAI] Manual benchmark failed: ${errorMsg}`);
+    const benchSD15 = await runBenchmark(false);
+    
+    if (!benchSD15.success) {
+      const errorMsg = benchSD15.error || 'Unknown benchmark error';
+      log(`[ImageAI] Manual SD 1.5 benchmark failed: ${errorMsg}`);
       
       // Set fallback tier based on GPU VRAM
       const vramGb = config.gpuVramGb || 0;
@@ -2613,12 +2674,53 @@ ipcMain.handle('retry-image-benchmark', async () => {
         config.imageQualityTier = 'banned';
       }
       config.imageBenchmarkTimeMs = null;
+      config.sdxlBenchmarkTimeMs = null;
       saveConfig();
       
       log(`[ImageAI] Using fallback tier: ${config.imageQualityTier} (based on ${vramGb}GB VRAM)`);
       sendStatusToRenderer();
       return { success: false, error: errorMsg, tier: config.imageQualityTier };
     }
+    
+    log(`[ImageAI] Manual SD 1.5 benchmark completed: ${benchSD15.time}ms, tier=${benchSD15.tier}`);
+    // Report to server - this also sets config.imageBenchmarkTimeMs and imageQualityTier
+    await reportBenchmarkResult(benchSD15.time);
+    
+    // ========== SDXL-Turbo Benchmark ==========
+    log('[ImageAI] === Manual SDXL-Turbo Benchmark ===');
+    if (mainWindow) {
+      mainWindow.webContents.send('image-ai-deps-progress', 'SDXL-Turbo benchmark (2/2)...');
+    }
+    
+    const benchSDXL = await runBenchmark(true);
+    
+    if (benchSDXL.success) {
+      config.sdxlBenchmarkTimeMs = benchSDXL.time;
+      saveConfig();
+      log(`[ImageAI] Manual SDXL-Turbo benchmark completed: ${benchSDXL.time}ms`);
+    } else {
+      log(`[ImageAI] Manual SDXL-Turbo benchmark failed: ${benchSDXL.error}`);
+      config.sdxlBenchmarkTimeMs = null;
+      saveConfig();
+    }
+    
+    sendStatusToRenderer();
+    
+    // Notify UI of dual benchmark complete
+    if (mainWindow) {
+      mainWindow.webContents.send('image-ai-dual-benchmark-complete', {
+        sd15Time: config.imageBenchmarkTimeMs,
+        sdxlTime: config.sdxlBenchmarkTimeMs,
+        tier: config.imageQualityTier
+      });
+    }
+    
+    return { 
+      success: true, 
+      sd15Time: config.imageBenchmarkTimeMs, 
+      sdxlTime: config.sdxlBenchmarkTimeMs,
+      tier: config.imageQualityTier 
+    };
   } catch (err) {
     log(`[ImageAI] Manual benchmark error: ${err.message}`);
     sendStatusToRenderer();
@@ -3341,11 +3443,13 @@ except Exception as e:
 }
 
 // Run benchmark image generation
-async function runBenchmark() {
-  log('[Benchmark] Starting benchmark (ONNX Runtime)...');
+// useSDXL: if true, benchmark SDXL-Turbo; if false, benchmark SD 1.5
+async function runBenchmark(useSDXL = false) {
+  const modelName = useSDXL ? 'SDXL-Turbo' : 'SD 1.5';
+  log(`[Benchmark] Starting ${modelName} benchmark (ONNX Runtime)...`);
   
   if (mainWindow) {
-    mainWindow.webContents.send('image-ai-benchmark-start');
+    mainWindow.webContents.send('image-ai-benchmark-start', { model: modelName });
   }
   
   // Pre-check that all required components exist
@@ -3387,46 +3491,53 @@ async function runBenchmark() {
   
   const benchmarkPrompt = 'a simple red cube on a white background, minimal, clean';
   const benchmarkSeed = 42;
-  const benchmarkWidth = 256;
-  const benchmarkHeight = 256;
+  // SDXL uses 1024x1024 natively, SD 1.5 uses 512x512, but benchmark at 256 for speed
+  const benchmarkWidth = useSDXL ? 512 : 256;
+  const benchmarkHeight = useSDXL ? 512 : 256;
   
   const startTime = Date.now();
   
   try {
-    log('[Benchmark] Starting image generation test...');
+    log(`[Benchmark] Starting ${modelName} image generation test...`);
     const result = await generateImage({
       prompt: benchmarkPrompt,
       seed: benchmarkSeed,
       width: benchmarkWidth,
       height: benchmarkHeight,
-      is_benchmark: true
+      is_benchmark: true,
+      use_sdxl: useSDXL
     });
     
     const totalTime = Date.now() - startTime;
     
     if (result.success) {
-      log(`[Benchmark] Success! Time: ${totalTime}ms`);
+      log(`[Benchmark] ${modelName} Success! Time: ${totalTime}ms`);
       
       // Save benchmark image for verification
-      const benchmarkImagePath = path.join(IMAGE_AI_DIR, 'benchmark-result.png');
+      const benchmarkImagePath = path.join(IMAGE_AI_DIR, `benchmark-result-${useSDXL ? 'sdxl' : 'sd15'}.png`);
       const imageBuffer = Buffer.from(result.image_base64, 'base64');
       fs.writeFileSync(benchmarkImagePath, imageBuffer);
       log(`[Benchmark] Image saved to: ${benchmarkImagePath}`);
       
-      await reportBenchmarkResult(totalTime);
+      // Only report/update quality tier for SD 1.5 benchmark (primary benchmark)
+      if (!useSDXL) {
+        await reportBenchmarkResult(totalTime);
+      }
       
       if (mainWindow) {
         mainWindow.webContents.send('image-ai-benchmark-complete', {
           time: totalTime,
-          tier: config.imageQualityTier
+          tier: config.imageQualityTier,
+          model: modelName,
+          useSDXL: useSDXL
         });
       }
       
-      return { success: true, time: totalTime, tier: config.imageQualityTier };
+      return { success: true, time: totalTime, tier: config.imageQualityTier, model: modelName };
     } else {
       // Show full error details - use fullError if available for complete info
       const fullErrorText = result.fullError || result.error || 'Unknown error during image generation';
-      log(`[Benchmark] Generation failed: ${result.error}`);
+      log(`[Benchmark] ${modelName} Generation failed: ${result.error}`);
       log(`[Benchmark] Full error output:\n${fullErrorText}`);
       
       // Create an error with both short and full error
@@ -3749,9 +3860,9 @@ if __name__ == "__main__":
 
 // Generate image using ONNX Runtime
 async function generateImage(params) {
-  const { prompt, seed, width, height, is_benchmark, tileX, tileY, totalTilesX, totalTilesY, tileOverlap } = params;
+  const { prompt, seed, width, height, is_benchmark, tileX, tileY, totalTilesX, totalTilesY, tileOverlap, use_sdxl } = params;
   
-  log(`[Generate] Starting ONNX inference: ${width}x${height}, seed=${seed}`);
+  log(`[Generate] Starting ONNX inference: ${width}x${height}, seed=${seed}, use_sdxl=${use_sdxl || false}`);
   log(`[Generate] Prompt: ${prompt.substring(0, 50)}...`);
   
   return new Promise((resolve, reject) => {
@@ -3837,13 +3948,15 @@ async function generateImage(params) {
       return;
     }
     
+    const modelId = use_sdxl ? SDXL_ONNX_MODEL_ID : SD_ONNX_MODEL_ID;
     const inputData = JSON.stringify({
       prompt,
       seed: seed || 42,
       width: width || 512,
       height: height || 512,
       model_dir: SD_MODEL_DIR,
-      model_id: SD_ONNX_MODEL_ID,
+      model_id: modelId,
+      use_sdxl: use_sdxl || false,
       is_benchmark: is_benchmark || false,
       tile_x: tileX,
       tile_y: tileY,

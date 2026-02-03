@@ -1757,7 +1757,7 @@
                 <div class="quality-radio"></div>
                 <div class="quality-info">
                   <div class="quality-label">High Quality</div>
-                  <div class="quality-desc">SDXL model (~10s), photorealistic</div>
+                  <div class="quality-desc">SDXL-Turbo (~5s), photorealistic</div>
                 </div>
               </div>
             </div>
@@ -1934,7 +1934,11 @@
           <div class="settings-item-icon">&#128202;</div>
           <div class="settings-item-content">
             <div class="settings-item-title">Performance Benchmark</div>
-            <div class="settings-item-subtitle" id="benchmarkResult">Not tested yet</div>
+            <div class="settings-item-subtitle">
+              <div id="benchmarkResult">Not tested yet</div>
+              <div id="benchmarkResultSD15" style="font-size: 0.7rem; color: #888; margin-top: 2px;">SD 1.5: --</div>
+              <div id="benchmarkResultSDXL" style="font-size: 0.7rem; color: #888;">SDXL-Turbo: --</div>
+            </div>
           </div>
           <div style="display: flex; gap: 0.5rem; align-items: center;">
             <button class="btn btn-primary btn-sm" id="retryBenchmarkBtn" style="padding: 0.25rem 0.75rem; font-size: 0.8rem; display: none;">Re-run</button>

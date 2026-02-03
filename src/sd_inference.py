@@ -175,8 +175,9 @@ def main():
         # Import the appropriate pipeline based on model type
         if use_sdxl:
             from optimum.onnxruntime import ORTStableDiffusionXLPipeline as ORTPipeline
-            default_model_id = "stabilityai/stable-diffusion-xl-base-1.0"
-            log("Using SDXL pipeline (ORTStableDiffusionXLPipeline)")
+            # Use SDXL-Turbo which is pre-exported ONNX (faster and works with DirectML)
+            default_model_id = "onnxruntime/sdxl-turbo"
+            log("Using SDXL-Turbo pipeline (ORTStableDiffusionXLPipeline)")
         else:
             from optimum.onnxruntime import ORTStableDiffusionPipeline as ORTPipeline
             default_model_id = "runwayml/stable-diffusion-v1-5"
@@ -296,10 +297,13 @@ def main():
         generator.manual_seed(seed)
         log(f"Random seed set: {seed}")
         
-        # SDXL benefits from fewer steps due to its architecture, SD 1.5 needs more
+        # SDXL-Turbo uses very few steps (1-4) with no guidance needed
+        # Regular SDXL would use 30 steps with guidance 7.0
+        # SD 1.5 uses 35 steps with guidance 7.5
         if use_sdxl:
-            num_steps = 20 if is_benchmark else 30  # SDXL is efficient at 30 steps
-            guidance_scale = 7.0  # SDXL works well at 7.0
+            # SDXL-Turbo (onnxruntime/sdxl-turbo) - optimized for fast inference
+            num_steps = 2 if is_benchmark else 4  # SDXL-Turbo needs only 1-4 steps
+            guidance_scale = 0.0  # SDXL-Turbo works without guidance (distilled model)
         else:
             num_steps = 20 if is_benchmark else 35  # SD 1.5 benefits from more steps
             guidance_scale = 7.5  # SD 1.5 classic value

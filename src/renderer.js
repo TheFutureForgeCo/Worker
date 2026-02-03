@@ -75,6 +75,8 @@ const deleteImageAiFilesBtn = document.getElementById('deleteImageAiFilesBtn');
 const deleteImageAiStatus = document.getElementById('deleteImageAiStatus');
 const imageBenchmarkStatus = document.getElementById('imageBenchmarkStatus');
 const benchmarkResult = document.getElementById('benchmarkResult');
+const benchmarkResultSD15 = document.getElementById('benchmarkResultSD15');
+const benchmarkResultSDXL = document.getElementById('benchmarkResultSDXL');
 const retryBenchmarkBtn = document.getElementById('retryBenchmarkBtn');
 const toggleBenchmarkLogsBtn = document.getElementById('toggleBenchmarkLogsBtn');
 const benchmarkLogsContainer = document.getElementById('benchmarkLogsContainer');
@@ -142,7 +144,7 @@ let conversations = [];
 let currentConversationId = null;
 let isGeneratingChat = false;
 let imageMode = false;
-let imageQuality = 'standard'; // 'standard' or 'high' (SDXL)
+let imageQuality = 'standard'; // 'standard' or 'high' (SDXL-Turbo)
 let maxPrivacyMode = false;
 let localProcessingMode = false;
 let currentMode = 'chat'; // 'chat' or 'worker'
@@ -618,8 +620,10 @@ function updateImageAiUI(status) {
     const benchmarkOk = imageBenchmarkTimeMs && imageQualityTier && imageQualityTier !== 'banned';
     const showRetryBtn = !benchmarkOk;
     
+    // Get SDXL benchmark time from status data
+    const sdxlBenchmarkTimeMs = data.sdxlBenchmarkTimeMs;
+    
     if (imageBenchmarkTimeMs) {
-      const seconds = (imageBenchmarkTimeMs / 1000).toFixed(1);
       let tierText = '';
       if (imageQualityTier === 'fast') {
         tierText = 'Fast - All quality levels';
@@ -632,7 +636,24 @@ function updateImageAiUI(status) {
       } else {
         tierText = 'Pending tier assignment';
       }
-      benchmarkResult.textContent = `${seconds}s - ${tierText}`;
+      benchmarkResult.textContent = tierText;
+      
+      // Update individual model benchmark times
+      if (benchmarkResultSD15) {
+        const sd15Seconds = (imageBenchmarkTimeMs / 1000).toFixed(1);
+        benchmarkResultSD15.textContent = `SD 1.5: ${sd15Seconds}s`;
+        benchmarkResultSD15.style.color = '#0af';
+      }
+      if (benchmarkResultSDXL) {
+        if (sdxlBenchmarkTimeMs) {
+          const sdxlSeconds = (sdxlBenchmarkTimeMs / 1000).toFixed(1);
+          benchmarkResultSDXL.textContent = `SDXL-Turbo: ${sdxlSeconds}s`;
+          benchmarkResultSDXL.style.color = '#0af';
+        } else {
+          benchmarkResultSDXL.textContent = 'SDXL-Turbo: Not tested';
+          benchmarkResultSDXL.style.color = '#888';
+        }
+      }
     } else {
       // No benchmark result
       if (imageQualityTier === 'banned') {
@@ -641,6 +662,16 @@ function updateImageAiUI(status) {
         benchmarkResult.textContent = `Using fallback: ${imageQualityTier} tier`;
       } else {
         benchmarkResult.textContent = 'Benchmark not run yet';
+      }
+      
+      // Reset individual model displays
+      if (benchmarkResultSD15) {
+        benchmarkResultSD15.textContent = 'SD 1.5: --';
+        benchmarkResultSD15.style.color = '#888';
+      }
+      if (benchmarkResultSDXL) {
+        benchmarkResultSDXL.textContent = 'SDXL-Turbo: --';
+        benchmarkResultSDXL.style.color = '#888';
       }
     }
     
@@ -1148,7 +1179,7 @@ if (window.electronAPI.onImageAiBenchmarkStart) {
   });
 }
 
-// Listen for benchmark complete
+// Listen for benchmark complete (single model - for backward compatibility)
 if (window.electronAPI.onImageAiBenchmarkComplete) {
   window.electronAPI.onImageAiBenchmarkComplete((data) => {
     console.log('[Renderer] Benchmark complete received:', data);
@@ -1158,7 +1189,10 @@ if (window.electronAPI.onImageAiBenchmarkComplete) {
     imageAiInstalled = true;
     
     // Update the benchmark state variables so updateImageAiUI has correct data
-    imageBenchmarkTimeMs = data.time;
+    // Handle both old format (single time) and new format (useSDXL flag)
+    if (!data.useSDXL) {
+      imageBenchmarkTimeMs = data.time;
+    }
     imageQualityTier = data.tier;
     
     if (downloadImageAiBtn) {
@@ -1184,11 +1218,87 @@ if (window.electronAPI.onImageAiBenchmarkComplete) {
       imageAiDownloadStatus.textContent = 'Installed and ready';
     }
     if (benchmarkResult) {
-      const seconds = (data.time / 1000).toFixed(1);
-      benchmarkResult.textContent = `${seconds}s - ${tierLabels[data.tier] || data.tier}`;
+      benchmarkResult.textContent = tierLabels[data.tier] || data.tier;
+    }
+    
+    // Update individual model results based on which model was tested
+    const seconds = (data.time / 1000).toFixed(1);
+    if (data.useSDXL) {
+      if (benchmarkResultSDXL) {
+        benchmarkResultSDXL.textContent = `SDXL-Turbo: ${seconds}s`;
+        benchmarkResultSDXL.style.color = '#0af';
+      }
+    } else {
+      if (benchmarkResultSD15) {
+        benchmarkResultSD15.textContent = `SD 1.5: ${seconds}s`;
+        benchmarkResultSD15.style.color = '#0af';
+      }
     }
     
     // Update the status text to reflect the tier
+    if (imageAiStatus && imageAiEnabled) {
+      imageAiStatus.textContent = `Enabled - ${data.tier} tier`;
+    }
+  });
+}
+
+// Listen for dual benchmark complete (both SD 1.5 and SDXL)
+if (window.electronAPI.onImageAiDualBenchmarkComplete) {
+  window.electronAPI.onImageAiDualBenchmarkComplete((data) => {
+    console.log('[Renderer] Dual benchmark complete received:', data);
+    isDownloadingImageAi = false;
+    currentImageAiPhase = 'idle';
+    imageAiProgress.style.display = 'none';
+    imageAiInstalled = true;
+    
+    // Update state variables
+    imageBenchmarkTimeMs = data.sd15Time;
+    imageQualityTier = data.tier;
+    
+    if (downloadImageAiBtn) {
+      downloadImageAiBtn.style.display = 'none';
+    }
+    if (uninstallImageAiBtn) {
+      uninstallImageAiBtn.style.display = 'flex';
+    }
+    
+    // Show benchmark status section
+    if (imageBenchmarkStatus) {
+      imageBenchmarkStatus.style.display = 'flex';
+    }
+    
+    const tierLabels = {
+      'fast': 'Fast (all sizes)',
+      'medium': 'Medium (up to 512px)',
+      'slow': 'Slow (256px only)',
+      'banned': 'Too slow for image tasks'
+    };
+    
+    if (imageAiDownloadStatus) {
+      imageAiDownloadStatus.textContent = 'Installed and ready';
+    }
+    if (benchmarkResult) {
+      benchmarkResult.textContent = tierLabels[data.tier] || data.tier;
+    }
+    
+    // Update both model results
+    if (benchmarkResultSD15 && data.sd15Time) {
+      const sd15Seconds = (data.sd15Time / 1000).toFixed(1);
+      benchmarkResultSD15.textContent = `SD 1.5: ${sd15Seconds}s`;
+      benchmarkResultSD15.style.color = '#0af';
+    }
+    if (benchmarkResultSDXL) {
+      if (data.sdxlTime) {
+        const sdxlSeconds = (data.sdxlTime / 1000).toFixed(1);
+        benchmarkResultSDXL.textContent = `SDXL-Turbo: ${sdxlSeconds}s`;
+        benchmarkResultSDXL.style.color = '#0af';
+      } else {
+        benchmarkResultSDXL.textContent = 'SDXL-Turbo: Failed';
+        benchmarkResultSDXL.style.color = '#f44';
+      }
+    }
+    
+    // Update the status text
     if (imageAiStatus && imageAiEnabled) {
       imageAiStatus.textContent = `Enabled - ${data.tier} tier`;
     }
