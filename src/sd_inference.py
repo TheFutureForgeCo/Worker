@@ -156,6 +156,7 @@ def main():
         
         pipe = None
         actual_provider = None
+        provider_verified = False
         
         # Try each provider in order until one works
         for provider_name, provider_desc in providers_to_try:
@@ -196,6 +197,7 @@ def main():
                     session_providers = pipe.unet.session.get_providers()
                     if provider_name in session_providers:
                         actual_provider = provider_name
+                        provider_verified = True
                         log(f"SUCCESS: {provider_name} is active")
                         break
                     else:
@@ -248,7 +250,10 @@ def main():
         log("STEP 5: Generating Image")
         log("-" * 40)
         
-        np.random.seed(seed)
+        # Create a proper random generator for reproducible results
+        # Note: ONNX Runtime uses numpy for random state
+        generator = np.random.RandomState(seed)
+        log(f"Random seed set: {seed}")
         
         num_steps = 20 if is_benchmark else 25
         log(f"Inference steps: {num_steps}")
@@ -257,15 +262,39 @@ def main():
         gen_start = time.time()
         log("Starting inference...")
         
-        result = pipe(
-            prompt,
-            width=width,
-            height=height,
-            num_inference_steps=num_steps,
-            guidance_scale=7.5,
-        )
+        # Some ONNX pipelines don't support generator parameter
+        # Try with generator first, fall back without
+        try:
+            result = pipe(
+                prompt,
+                width=width,
+                height=height,
+                num_inference_steps=num_steps,
+                guidance_scale=7.5,
+                generator=generator,
+            )
+        except TypeError as e:
+            log(f"Generator parameter not supported, running without it: {e}")
+            result = pipe(
+                prompt,
+                width=width,
+                height=height,
+                num_inference_steps=num_steps,
+                guidance_scale=7.5,
+            )
         
         image = result.images[0]
+        
+        # Validate image is not blank (all black or all white)
+        img_array = np.array(image)
+        img_min = img_array.min()
+        img_max = img_array.max()
+        img_mean = img_array.mean()
+        log(f"Image stats - min: {img_min}, max: {img_max}, mean: {img_mean:.2f}")
+        
+        if img_max - img_min < 5:
+            log("WARNING: Image appears to be blank (very low variance)")
+            log("This may indicate a model loading or inference issue")
         gen_time = time.time() - gen_start
         total_time = time.time() - start_time
         
@@ -301,6 +330,9 @@ def main():
         log("BENCHMARK COMPLETE" if is_benchmark else "GENERATION COMPLETE")
         log("=" * 60)
         
+        # Check if image is blank (indicates a problem)
+        is_blank = (img_max - img_min) < 5
+        
         result = {
             "success": True,
             "image_base64": image_base64,
@@ -311,8 +343,22 @@ def main():
             "generation_time_ms": int(gen_time * 1000),
             "total_time_ms": int(total_time * 1000),
             "provider": provider,
-            "provider_verified": provider_verified
+            "provider_verified": provider_verified,
+            "image_stats": {
+                "min": int(img_min),
+                "max": int(img_max),
+                "mean": float(img_mean),
+                "is_blank": is_blank
+            }
         }
+        
+        if is_blank:
+            log("ERROR: Generated image is blank!")
+            log("Possible causes:")
+            log("  1. ONNX model not properly loaded")
+            log("  2. Wrong execution provider")
+            log("  3. Corrupted model files - try redownloading")
+            result["warning"] = "Image appears blank - may indicate model issue"
         
         print(json.dumps(result))
         return 0
