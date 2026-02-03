@@ -51,9 +51,33 @@
       border-bottom: 1px solid var(--border-subtle);
       display: flex;
       align-items: center;
-      gap: 12px;
+      justify-content: space-between;
       -webkit-app-region: drag;
       user-select: none;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex: 1;
+    }
+
+    .header-center {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: 1;
+      -webkit-app-region: no-drag;
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+      justify-content: flex-end;
+      -webkit-app-region: no-drag;
     }
 
     .header-actions, .header-actions * {
@@ -63,7 +87,6 @@
     .window-controls {
       display: flex;
       gap: 4px;
-      margin-left: 8px;
       -webkit-app-region: no-drag;
     }
 
@@ -180,8 +203,6 @@
       background: var(--bg-tertiary);
       border-radius: var(--radius);
       padding: 3px;
-      margin-left: auto;
-      margin-right: 12px;
     }
 
     .mode-tab {
@@ -987,10 +1008,174 @@
     }
 
     /* Private Chat Page Styles */
+    .chat-layout {
+      display: flex;
+      height: 100%;
+      position: relative;
+    }
+
+    .chat-sidebar {
+      width: 240px;
+      background: var(--bg-secondary);
+      border-right: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      transition: transform 0.2s ease, width 0.2s ease;
+    }
+
+    .chat-sidebar.collapsed {
+      width: 0;
+      overflow: hidden;
+      border-right: none;
+    }
+
+    .chat-sidebar-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .chat-sidebar-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .chat-new-btn {
+      width: 28px;
+      height: 28px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border-color);
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      font-size: 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all var(--transition);
+    }
+
+    .chat-new-btn:hover {
+      background: var(--primary);
+      border-color: var(--primary);
+    }
+
+    .chat-sidebar-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+    }
+
+    .chat-sidebar-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: background var(--transition);
+      margin-bottom: 4px;
+    }
+
+    .chat-sidebar-item:hover {
+      background: var(--bg-tertiary);
+    }
+
+    .chat-sidebar-item.active {
+      background: var(--bg-elevated);
+    }
+
+    .chat-sidebar-item-title {
+      flex: 1;
+      font-size: 13px;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .chat-sidebar-item-delete {
+      width: 20px;
+      height: 20px;
+      border-radius: 4px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 12px;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      transition: all var(--transition);
+    }
+
+    .chat-sidebar-item:hover .chat-sidebar-item-delete {
+      display: flex;
+    }
+
+    .chat-sidebar-item-delete:hover {
+      background: var(--danger);
+      color: white;
+    }
+
+    .chat-sidebar-toggle {
+      position: absolute;
+      left: 8px;
+      top: 8px;
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border-color);
+      background: var(--bg-tertiary);
+      color: var(--text-secondary);
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+      transition: all var(--transition);
+    }
+
+    .chat-sidebar-toggle:hover {
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+    }
+
+    @media (max-width: 600px) {
+      .chat-sidebar {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        z-index: 20;
+        transform: translateX(0);
+      }
+
+      .chat-sidebar.collapsed {
+        transform: translateX(-100%);
+        width: 240px;
+      }
+
+      .chat-sidebar-toggle {
+        display: flex;
+      }
+
+      .chat-container {
+        margin-left: 0;
+      }
+    }
+
     .chat-container {
       display: flex;
       flex-direction: column;
-      height: 100%;
+      flex: 1;
+      min-width: 0;
       background: var(--bg-primary);
     }
 
@@ -998,6 +1183,7 @@
       display: flex;
       align-items: center;
       padding: 12px 16px;
+      padding-left: 48px;
       background: var(--bg-secondary);
       border-bottom: 1px solid var(--border-subtle);
       gap: 12px;
@@ -1061,11 +1247,44 @@
       display: flex;
       gap: 10px;
       max-width: 85%;
+      position: relative;
     }
 
     .chat-message.user {
       align-self: flex-end;
       flex-direction: row-reverse;
+    }
+
+    .chat-message-delete {
+      position: absolute;
+      top: 4px;
+      right: -24px;
+      width: 20px;
+      height: 20px;
+      border-radius: 4px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 14px;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      transition: all var(--transition);
+    }
+
+    .chat-message.user .chat-message-delete {
+      right: auto;
+      left: -24px;
+    }
+
+    .chat-message:hover .chat-message-delete {
+      display: flex;
+    }
+
+    .chat-message-delete:hover {
+      background: var(--danger);
+      color: white;
     }
 
     .chat-message-avatar {
@@ -1154,6 +1373,37 @@
       padding: 12px 16px;
       background: var(--bg-secondary);
       border-top: 1px solid var(--border-subtle);
+      margin-top: auto;
+      flex-shrink: 0;
+    }
+
+    .chat-input-options {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+      flex-wrap: wrap;
+    }
+
+    .chat-option-btn {
+      padding: 6px 12px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border-color);
+      background: var(--bg-tertiary);
+      color: var(--text-secondary);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all var(--transition);
+    }
+
+    .chat-option-btn:hover {
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+    }
+
+    .chat-clear-btn:hover {
+      background: var(--danger);
+      border-color: var(--danger);
+      color: white;
     }
 
     .chat-input-wrapper {
@@ -1347,75 +1597,103 @@
   </div>
 
   <div class="header">
-    <div class="window-controls">
-      <button class="window-btn minimize" id="windowMinimize" title="Minimize">
-        <svg viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-      </button>
-      <button class="window-btn maximize" id="windowMaximize" title="Maximize">
-        <svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"></rect></svg>
-      </button>
-      <button class="window-btn close" id="windowClose" title="Close">
-        <svg viewBox="0 0 24 24"><line x1="6" y1="6" x2="18" y2="18"></line><line x1="6" y1="18" x2="18" y2="6"></line></svg>
-      </button>
-    </div>
-    <div class="logo-icon">CG</div>
-    <div class="header-text">
-      <div class="logo">ComputeGrid</div>
-      <div class="subtitle">Worker Desktop App</div>
-    </div>
-    <span class="version-badge" id="versionBadge">v...</span>
-    
-    <!-- Mode Tab Toggle -->
-    <div class="mode-tabs" id="modeTabs">
-      <button class="mode-tab active" id="chatTabBtn" data-testid="button-chat-tab">
-        <span class="mode-tab-icon">&#128172;</span>
-        <span class="mode-tab-label">Chat</span>
-      </button>
-      <button class="mode-tab" id="workerTabBtn" data-testid="button-worker-tab">
-        <span class="mode-tab-icon">&#9881;</span>
-        <span class="mode-tab-label">Worker</span>
-      </button>
+    <!-- Left section: Logo -->
+    <div class="header-left">
+      <div class="logo-icon">CG</div>
+      <div class="header-text">
+        <div class="logo">ComputeGrid</div>
+        <div class="subtitle">Worker Desktop App</div>
+      </div>
+      <span class="version-badge" id="versionBadge">v...</span>
     </div>
     
-    <div class="header-actions">
-      <button class="icon-btn" id="settingsBtn" title="Settings">&#9881;</button>
+    <!-- Center section: Mode Tab Toggle -->
+    <div class="header-center">
+      <div class="mode-tabs" id="modeTabs">
+        <button class="mode-tab active" id="chatTabBtn" data-testid="button-chat-tab">
+          <span class="mode-tab-icon">💬</span>
+          <span class="mode-tab-label">Chat</span>
+        </button>
+        <button class="mode-tab" id="workerTabBtn" data-testid="button-worker-tab">
+          <span class="mode-tab-icon">⚙</span>
+          <span class="mode-tab-label">Worker</span>
+        </button>
+      </div>
+    </div>
+    
+    <!-- Right section: Settings + Window Controls -->
+    <div class="header-right">
+      <div class="header-actions">
+        <button class="icon-btn" id="settingsBtn" title="Settings">⚙</button>
+      </div>
+      <div class="window-controls">
+        <button class="window-btn minimize" id="windowMinimize" title="Minimize">
+          <svg viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        </button>
+        <button class="window-btn maximize" id="windowMaximize" title="Maximize">
+          <svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"></rect></svg>
+        </button>
+        <button class="window-btn close" id="windowClose" title="Close">
+          <svg viewBox="0 0 24 24"><line x1="6" y1="6" x2="18" y2="18"></line><line x1="6" y1="18" x2="18" y2="6"></line></svg>
+        </button>
+      </div>
     </div>
   </div>
 
   <!-- Chat Page (Default View) -->
   <div class="page active" id="chatPage">
-    <div class="chat-container">
-      <div class="chat-header">
-        <div class="chat-title">AI Chat</div>
-        <div class="chat-local-toggle" id="localProcessingToggle">
-          <span class="chat-local-toggle-label">Local Processing</span>
-          <div class="toggle-switch" id="localProcessingSwitch" data-testid="toggle-local-processing"></div>
+    <div class="chat-layout">
+      <!-- Sidebar for conversations -->
+      <div class="chat-sidebar" id="chatSidebar">
+        <div class="chat-sidebar-header">
+          <span class="chat-sidebar-title">Conversations</span>
+          <button class="chat-new-btn" id="chatNewBtn" title="New Conversation" data-testid="button-new-chat">+</button>
         </div>
-        <div class="chat-privacy-badge" id="chatPrivacyBadge" style="display: none;">&#128274; 100% Local</div>
+        <div class="chat-sidebar-list" id="chatSidebarList"></div>
       </div>
-      <div class="chat-messages" id="chatMessages">
-        <div class="chat-welcome">
-          <div class="chat-welcome-icon">&#129302;</div>
-          <div class="chat-welcome-title">AI Assistant</div>
-          <div class="chat-welcome-text" id="chatWelcomeText">Chat with AI powered by the ComputeGrid network. Toggle Local Processing for 100% offline mode.</div>
+      
+      <!-- Sidebar toggle for small screens -->
+      <button class="chat-sidebar-toggle" id="chatSidebarToggle" title="Toggle Sidebar" data-testid="button-toggle-sidebar">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 12h18M3 6h18M3 18h18"></path>
+        </svg>
+      </button>
+      
+      <!-- Main chat area -->
+      <div class="chat-container">
+        <div class="chat-header">
+          <div class="chat-title" id="chatTitle">AI Chat</div>
+          <div class="chat-local-toggle" id="localProcessingToggle">
+            <span class="chat-local-toggle-label">Local Processing</span>
+            <div class="toggle-switch" id="localProcessingSwitch" data-testid="toggle-local-processing"></div>
+          </div>
+          <div class="chat-privacy-badge" id="chatPrivacyBadge" style="display: none;">🔒 100% Local</div>
         </div>
-      </div>
-      <div class="chat-input-area">
-        <div class="chat-input-wrapper">
-          <textarea class="chat-input" id="chatInput" placeholder="Type a message..." rows="1" data-testid="input-chat-message"></textarea>
-          <button class="chat-send-btn" id="chatSendBtn" data-testid="button-send-chat">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M22 2L11 13"></path>
-              <path d="M22 2L15 22L11 13L2 9L22 2Z"></path>
-            </svg>
-          </button>
+        <div class="chat-messages" id="chatMessages">
+          <div class="chat-welcome">
+            <div class="chat-welcome-icon">🤖</div>
+            <div class="chat-welcome-title">AI Assistant</div>
+            <div class="chat-welcome-text" id="chatWelcomeText">Chat with AI powered by the ComputeGrid network. Toggle Local Processing for 100% offline mode.</div>
+          </div>
         </div>
-        <div class="chat-model-selector">
-          <select id="chatModelSelect" class="chat-model-select" data-testid="select-chat-model">
-            <option value="mistral">Mistral 7B</option>
-            <option value="tinyllama">TinyLlama</option>
-          </select>
-          <button class="chat-image-btn" id="chatImageBtn" title="Generate Image" data-testid="button-generate-image">&#127912;</button>
+        <div class="chat-input-area">
+          <div class="chat-input-options">
+            <select id="chatModelSelect" class="chat-model-select" data-testid="select-chat-model" style="display: none;">
+              <option value="mistral">Mistral 7B</option>
+              <option value="tinyllama">TinyLlama</option>
+            </select>
+            <button class="chat-option-btn" id="chatImageBtn" title="Generate Image" data-testid="button-generate-image" style="display: none;">🎨 Image</button>
+            <button class="chat-option-btn chat-clear-btn" id="chatClearBtn" title="Clear Messages" data-testid="button-clear-chat">🗑️ Clear</button>
+          </div>
+          <div class="chat-input-wrapper">
+            <textarea class="chat-input" id="chatInput" placeholder="Type a message..." rows="1" data-testid="input-chat-message"></textarea>
+            <button class="chat-send-btn" id="chatSendBtn" data-testid="button-send-chat">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 2L11 13"></path>
+                <path d="M22 2L15 22L11 13L2 9L22 2Z"></path>
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
     </div>

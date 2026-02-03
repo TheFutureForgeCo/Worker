@@ -3303,11 +3303,20 @@ async function runBenchmark() {
   // Pre-check that all required components exist
   log('[Benchmark] Pre-check: Verifying Image AI components...');
   
-  const pythonPath = process.platform === 'win32'
-    ? path.join(IMAGE_AI_DIR, 'python', 'python', 'python.exe')
-    : path.join(IMAGE_AI_DIR, 'python', 'python', 'bin', 'python3');
-  // Use the ONNX model directory
-  const modelDir = SD_MODEL_DIR;
+  // Use unified AI paths - supports both bundled and legacy installations
+  const aiPaths = getAiPaths();
+  const pythonPath = aiPaths.pythonExe;
+  const modelDir = aiPaths.sdModelPath || SD_MODEL_DIR;
+  
+  log(`[Benchmark] Using ${aiPaths.useBundled ? 'bundled' : 'legacy'} AI installation`);
+  log(`[Benchmark] Python path: ${pythonPath}`);
+  log(`[Benchmark] Model path: ${modelDir}`);
+  
+  // Verify model path is a directory (not a file)
+  if (fs.existsSync(modelDir) && !fs.statSync(modelDir).isDirectory()) {
+    log(`[Benchmark] WARNING: Model path is a file, not a directory. Using parent directory.`);
+    // This shouldn't happen with the fixed getBundlePaths, but handle it just in case
+  }
   
   if (!fs.existsSync(pythonPath)) {
     const errMsg = `Python not found at: ${pythonPath}`;

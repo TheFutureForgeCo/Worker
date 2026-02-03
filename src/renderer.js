@@ -129,9 +129,17 @@ const chatInput = document.getElementById('chatInput');
 const chatSendBtn = document.getElementById('chatSendBtn');
 const chatModelSelect = document.getElementById('chatModelSelect');
 const chatImageBtn = document.getElementById('chatImageBtn');
+const chatClearBtn = document.getElementById('chatClearBtn');
+const chatSidebar = document.getElementById('chatSidebar');
+const chatSidebarToggle = document.getElementById('chatSidebarToggle');
+const chatSidebarList = document.getElementById('chatSidebarList');
+const chatNewBtn = document.getElementById('chatNewBtn');
+const chatTitle = document.getElementById('chatTitle');
 
 // Chat state
 let chatHistory = [];
+let conversations = [];
+let currentConversationId = null;
 let isGeneratingChat = false;
 let imageMode = false;
 let maxPrivacyMode = false;
@@ -1400,6 +1408,24 @@ async function updatePrivacyModeUI() {
 if (maxPrivacyToggle) {
   maxPrivacyToggle.addEventListener('click', async () => {
     const newValue = !maxPrivacyMode;
+    
+    // If turning OFF maximum privacy mode, warn user about local chat deletion
+    if (!newValue && conversations.length > 0) {
+      const confirmDelete = confirm(
+        'Disabling Maximum Privacy Mode will delete all local conversations for your privacy. Continue?'
+      );
+      if (!confirmDelete) {
+        return;
+      }
+      // Delete all local conversations
+      conversations = [];
+      chatHistory = [];
+      currentConversationId = null;
+      await window.electronAPI.saveLocalConversations([]);
+      renderChatMessages();
+      renderSidebar();
+    }
+    
     await window.electronAPI.setMaxPrivacyMode(newValue);
     await updatePrivacyModeUI();
     
@@ -1429,7 +1455,7 @@ if (localProcessingToggle) {
     
     // Update UI
     if (localProcessingSwitch) {
-      localProcessingSwitch.classList.toggle('on', localProcessingMode);
+      localProcessingSwitch.classList.toggle('active', localProcessingMode);
     }
     if (localProcessingToggle) {
       localProcessingToggle.classList.toggle('active', localProcessingMode);
@@ -1443,10 +1469,12 @@ if (localProcessingToggle) {
         : 'Chat with AI powered by the ComputeGrid network. Toggle Local Processing for 100% offline mode.';
     }
     
-    // Show/hide model selector based on mode (only show for local processing)
-    if (chatModelSelect && chatModelSelect.parentElement) {
-      // Show model selector only in local processing mode
+    // Show/hide model selector and image button based on mode (only show for local processing)
+    if (chatModelSelect) {
       chatModelSelect.style.display = localProcessingMode ? 'block' : 'none';
+    }
+    if (chatImageBtn) {
+      chatImageBtn.style.display = localProcessingMode ? 'inline-flex' : 'none';
     }
     
     // Update chat title to reflect mode
@@ -1463,7 +1491,7 @@ if (localProcessingToggle) {
 if (openPrivateChatBtn) {
   openPrivateChatBtn.addEventListener('click', () => {
     localProcessingMode = true;
-    if (localProcessingSwitch) localProcessingSwitch.classList.add('on');
+    if (localProcessingSwitch) localProcessingSwitch.classList.add('active');
     if (localProcessingToggle) localProcessingToggle.classList.add('active');
     if (chatPrivacyBadge) chatPrivacyBadge.style.display = 'flex';
     showPage('chatPage');
@@ -1473,34 +1501,62 @@ if (openPrivateChatBtn) {
 // Load chat history from local storage
 async function loadChatHistory() {
   try {
-    const conversations = await window.electronAPI.loadLocalConversations();
-    chatHistory = conversations || [];
+    const loadedConversations = await window.electronAPI.loadLocalConversations();
+    
+    // Handle migration from old format (array of messages) to new format (array of conversations)
+    if (Array.isArray(loadedConversations) && loadedConversations.length > 0) {
+      if (loadedConversations[0].role) {
+        // Old format - migrate to new format
+        conversations = [{
+          id: 'conv_migrated',
+          title: 'Previous Chat',
+          messages: loadedConversations,
+          createdAt: new Date().toISOString()
+        }];
+        currentConversationId = 'conv_migrated';
+        chatHistory = loadedConversations;
+      } else if (loadedConversations[0].id) {
+        // New format
+        conversations = loadedConversations;
+        if (conversations.length > 0) {
+          currentConversationId = conversations[0].id;
+          chatHistory = conversations[0].messages || [];
+        }
+      }
+    } else {
+      conversations = [];
+      chatHistory = [];
+    }
+    
     renderChatMessages();
+    renderSidebar();
   } catch (err) {
     console.error('Failed to load chat history:', err);
+    conversations = [];
     chatHistory = [];
   }
 }
 
-// Save chat history to local storage
+// Save chat history to local storage (wrapper for compatibility)
 async function saveChatHistory() {
-  try {
-    await window.electronAPI.saveLocalConversations(chatHistory);
-  } catch (err) {
-    console.error('Failed to save chat history:', err);
-  }
+  await saveAllConversations();
 }
 
 // Render chat messages
 function renderChatMessages() {
   if (!chatMessages) return;
   
+  const welcomeTitle = localProcessingMode ? 'Private AI Assistant' : 'AI Assistant';
+  const welcomeText = localProcessingMode 
+    ? 'Your conversations are 100% local. Nothing is sent to any server. Start chatting!'
+    : 'Chat with AI powered by the ComputeGrid network. Toggle Local Processing for 100% offline mode.';
+  
   if (chatHistory.length === 0) {
     chatMessages.innerHTML = `
       <div class="chat-welcome">
-        <div class="chat-welcome-icon">&#129302;</div>
-        <div class="chat-welcome-title">Private AI Assistant</div>
-        <div class="chat-welcome-text">Your conversations are 100% local. Nothing is sent to any server. Start chatting!</div>
+        <div class="chat-welcome-icon">🤖</div>
+        <div class="chat-welcome-title">${welcomeTitle}</div>
+        <div class="chat-welcome-text">${welcomeText}</div>
       </div>
     `;
     return;
@@ -1508,16 +1564,34 @@ function renderChatMessages() {
   
   chatMessages.innerHTML = chatHistory.map((msg, idx) => `
     <div class="chat-message ${msg.role}" data-idx="${idx}">
-      <div class="chat-message-avatar">${msg.role === 'user' ? 'U' : 'AI'}</div>
+      <div class="chat-message-avatar">${msg.role === 'user' ? '👤' : '🤖'}</div>
       <div class="chat-message-content">
         ${formatChatContent(msg.content)}
         ${msg.image ? `<img class="chat-message-image" src="file://${msg.image}" alt="Generated image">` : ''}
       </div>
+      <button class="chat-message-delete" data-idx="${idx}" title="Delete message">×</button>
     </div>
   `).join('');
   
+  // Add delete handlers
+  chatMessages.querySelectorAll('.chat-message-delete').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = parseInt(btn.dataset.idx);
+      deleteMessage(idx);
+    });
+  });
+  
   // Scroll to bottom
   chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// Delete a single message
+function deleteMessage(idx) {
+  if (idx < 0 || idx >= chatHistory.length) return;
+  chatHistory.splice(idx, 1);
+  renderChatMessages();
+  saveChatHistory();
 }
 
 // Format chat content (handle code blocks, etc.)
@@ -1739,6 +1813,180 @@ if (window.electronAPI.onLocalImageError) {
 }
 
 // ========== END MAXIMUM PRIVACY MODE ==========
+
+// ========== CHAT SIDEBAR & CONVERSATION MANAGEMENT ==========
+
+// Toggle sidebar visibility
+if (chatSidebarToggle) {
+  chatSidebarToggle.addEventListener('click', () => {
+    if (chatSidebar) {
+      chatSidebar.classList.toggle('collapsed');
+    }
+  });
+}
+
+// Create new conversation
+if (chatNewBtn) {
+  chatNewBtn.addEventListener('click', () => {
+    createNewConversation();
+  });
+}
+
+function createNewConversation() {
+  const id = 'conv_' + Date.now();
+  const newConv = {
+    id: id,
+    title: 'New Chat',
+    messages: [],
+    createdAt: new Date().toISOString()
+  };
+  conversations.unshift(newConv);
+  currentConversationId = id;
+  chatHistory = [];
+  renderChatMessages();
+  renderSidebar();
+  saveAllConversations();
+  
+  // Update title
+  if (chatTitle) {
+    chatTitle.textContent = localProcessingMode ? 'AI Chat (Local)' : 'AI Chat';
+  }
+}
+
+// Render sidebar with conversations
+function renderSidebar() {
+  if (!chatSidebarList) return;
+  
+  if (conversations.length === 0) {
+    chatSidebarList.innerHTML = `
+      <div style="padding: 16px; text-align: center; color: var(--text-muted); font-size: 12px;">
+        No conversations yet.<br>Start chatting to create one.
+      </div>
+    `;
+    return;
+  }
+  
+  chatSidebarList.innerHTML = conversations.map(conv => `
+    <div class="chat-sidebar-item ${conv.id === currentConversationId ? 'active' : ''}" data-id="${conv.id}">
+      <span class="chat-sidebar-item-title">${escapeHtml(conv.title || 'New Chat')}</span>
+      <button class="chat-sidebar-item-delete" data-id="${conv.id}" title="Delete conversation">×</button>
+    </div>
+  `).join('');
+  
+  // Add click handlers
+  chatSidebarList.querySelectorAll('.chat-sidebar-item').forEach(item => {
+    item.addEventListener('click', (e) => {
+      if (e.target.classList.contains('chat-sidebar-item-delete')) return;
+      const id = item.dataset.id;
+      switchConversation(id);
+    });
+  });
+  
+  // Add delete handlers
+  chatSidebarList.querySelectorAll('.chat-sidebar-item-delete').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      deleteConversation(id);
+    });
+  });
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function switchConversation(id) {
+  // Save current conversation
+  if (currentConversationId) {
+    const currentConv = conversations.find(c => c.id === currentConversationId);
+    if (currentConv) {
+      currentConv.messages = [...chatHistory];
+    }
+  }
+  
+  // Switch to new conversation
+  currentConversationId = id;
+  const conv = conversations.find(c => c.id === id);
+  if (conv) {
+    chatHistory = conv.messages || [];
+    if (chatTitle) {
+      chatTitle.textContent = conv.title || (localProcessingMode ? 'AI Chat (Local)' : 'AI Chat');
+    }
+  }
+  
+  renderChatMessages();
+  renderSidebar();
+  saveAllConversations();
+}
+
+function deleteConversation(id) {
+  const index = conversations.findIndex(c => c.id === id);
+  if (index === -1) return;
+  
+  conversations.splice(index, 1);
+  
+  // If we deleted the current conversation, switch to first one or create new
+  if (id === currentConversationId) {
+    if (conversations.length > 0) {
+      switchConversation(conversations[0].id);
+    } else {
+      createNewConversation();
+    }
+  } else {
+    renderSidebar();
+    saveAllConversations();
+  }
+}
+
+// Clear current conversation messages
+if (chatClearBtn) {
+  chatClearBtn.addEventListener('click', () => {
+    if (chatHistory.length === 0) return;
+    
+    chatHistory = [];
+    renderChatMessages();
+    
+    // Update conversation in list
+    if (currentConversationId) {
+      const conv = conversations.find(c => c.id === currentConversationId);
+      if (conv) {
+        conv.messages = [];
+        conv.title = 'New Chat';
+      }
+    }
+    
+    saveAllConversations();
+  });
+}
+
+// Save all conversations to local storage
+async function saveAllConversations() {
+  try {
+    // Update current conversation messages
+    if (currentConversationId) {
+      const conv = conversations.find(c => c.id === currentConversationId);
+      if (conv) {
+        conv.messages = [...chatHistory];
+        // Auto-title based on first message
+        if (chatHistory.length > 0 && conv.title === 'New Chat') {
+          const firstMsg = chatHistory.find(m => m.role === 'user');
+          if (firstMsg) {
+            conv.title = firstMsg.content.substring(0, 30) + (firstMsg.content.length > 30 ? '...' : '');
+          }
+        }
+      }
+    }
+    await window.electronAPI.saveLocalConversations(conversations);
+    renderSidebar();
+  } catch (err) {
+    console.error('Failed to save conversations:', err);
+  }
+}
+
+// ========== END CHAT SIDEBAR ==========
 
 // Initialize on load
 async function initPrivacyMode() {

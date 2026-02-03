@@ -83,14 +83,40 @@ function getBundlePaths() {
   const bundleDir = getBundleDir();
   const isWindows = process.platform === 'win32';
   
+  // Expected paths for bundle components
+  const ollamaBinary = path.join(bundleDir, 'ollama', isWindows ? 'ollama.exe' : 'ollama');
+  const pythonExe = path.join(bundleDir, 'python', isWindows ? 'python.exe' : 'bin/python3');
+  
+  // For ONNX models, we use a DIRECTORY containing model files (model_index.json, etc.)
+  // The SD ONNX model is stored in a subdirectory, not as a single safetensors file
+  const sdModelDir = path.join(bundleDir, 'models', 'sd-onnx');
+  const sdModelFile = path.join(bundleDir, 'models', 'sd-v1-5.safetensors'); // Legacy single file
+  
+  // Use the directory if it exists (ONNX format), otherwise fall back to file (safetensors format)
+  const sdModelPath = fs.existsSync(sdModelDir) ? sdModelDir : 
+                      fs.existsSync(sdModelFile) ? path.dirname(sdModelFile) : sdModelDir;
+  
+  const imageGenScript = path.join(bundleDir, 'scripts', 'sd_inference.py');
+  
+  // Check if required components exist
+  const isValid = fs.existsSync(ollamaBinary) && fs.existsSync(pythonExe);
+  
   return {
     bundleDir,
-    ollama: path.join(bundleDir, 'ollama', isWindows ? 'ollama.exe' : 'ollama'),
-    ollamaModels: path.join(bundleDir, 'ollama', 'models'),
-    python: path.join(bundleDir, 'python', isWindows ? 'python.exe' : 'bin/python3'),
+    isValid,
+    // Property names expected by getAiPaths() in main.js
+    ollamaBinary,
+    ollamaModelsDir: path.join(bundleDir, 'ollama', 'models'),
     pythonDir: path.join(bundleDir, 'python'),
-    sdModel: path.join(bundleDir, 'models', 'sd-v1-5.safetensors'),
-    modelsDir: path.join(bundleDir, 'models')
+    pythonExe,
+    sdModelPath, // Always a directory, not a single file
+    imageGenScript: fs.existsSync(imageGenScript) ? imageGenScript : null,
+    modelsDir: path.join(bundleDir, 'models'),
+    // Legacy property names for backward compatibility
+    ollama: ollamaBinary,
+    ollamaModels: path.join(bundleDir, 'ollama', 'models'),
+    python: pythonExe,
+    sdModel: sdModelFile // Single file for legacy use cases
   };
 }
 

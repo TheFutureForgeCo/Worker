@@ -1026,12 +1026,14 @@ async function sendHeartbeat() {
     });
     
     if (response.status === 200) {
+      // Always send stats after heartbeat to keep watchdog happy
+      sendStats();
+      
       if (connectionFailed) {
         log('Heartbeat successful - connection restored');
         connectionFailed = false;
         lastError = null;
         stats.status = 'Running';
-        sendStats();
       }
     } else if (response.status === 401) {
       // API key invalid
