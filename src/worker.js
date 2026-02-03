@@ -816,7 +816,12 @@ function getSdInferenceScriptPath(forceRefresh = false) {
   // Build list of possible paths - prioritize packaged app locations
   const possiblePaths = [];
   
-  // In packaged app, check resources first
+  // Image-AI bundle directory (most reliable in packaged app)
+  const imageAiDir = path.join(USER_DATA_DIR, 'image-ai');
+  possiblePaths.push(path.join(imageAiDir, 'sd_inference.py'));
+  possiblePaths.push(path.join(imageAiDir, 'scripts', 'sd_inference.py'));
+  
+  // In packaged app, check resources
   if (process.resourcesPath) {
     possiblePaths.push(path.join(process.resourcesPath, 'app.asar.unpacked', 'src', 'sd_inference.py'));
     possiblePaths.push(path.join(process.resourcesPath, 'sd_inference.py'));
@@ -840,6 +845,30 @@ function getSdInferenceScriptPath(forceRefresh = false) {
     } catch (err) {
       // Skip paths that cause errors (e.g., permission issues)
       log(`Error checking path ${p}: ${err.message}`);
+    }
+  }
+  
+  // Last resort: try to copy from resources to image-ai directory
+  if (process.resourcesPath) {
+    const sourcePaths = [
+      path.join(process.resourcesPath, 'app.asar.unpacked', 'src', 'sd_inference.py'),
+      path.join(process.resourcesPath, 'sd_inference.py'),
+      path.join(__dirname, 'sd_inference.py')
+    ];
+    
+    for (const src of sourcePaths) {
+      try {
+        if (fs.existsSync(src)) {
+          const destPath = path.join(imageAiDir, 'sd_inference.py');
+          fs.mkdirSync(imageAiDir, { recursive: true });
+          fs.copyFileSync(src, destPath);
+          log(`Copied SD inference script from ${src} to ${destPath}`);
+          cachedSdScriptPath = destPath;
+          return destPath;
+        }
+      } catch (err) {
+        log(`Failed to copy from ${src}: ${err.message}`);
+      }
     }
   }
   

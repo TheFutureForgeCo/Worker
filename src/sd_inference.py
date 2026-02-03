@@ -101,6 +101,14 @@ def main():
         output_path = input_data.get("output_path", "")
         is_benchmark = input_data.get("is_benchmark", False)
         
+        # CRITICAL: Round dimensions to multiple of 8 for ONNX compatibility
+        # ONNX models require dimensions divisible by 8 to avoid tensor shape mismatches
+        original_width, original_height = width, height
+        width = ((width + 7) // 8) * 8
+        height = ((height + 7) // 8) * 8
+        if width != original_width or height != original_height:
+            log(f"Adjusted dimensions from {original_width}x{original_height} to {width}x{height} (must be divisible by 8)")
+        
         log("=" * 60)
         log("BENCHMARK START" if is_benchmark else "IMAGE GENERATION START")
         log("=" * 60)
@@ -134,12 +142,14 @@ def main():
         log(f"DirectML provider available: {use_dml}")
         
         # Determine provider priority with fallback chain
-        # CUDA may show as "available" but fail at runtime if CUDA Toolkit not installed
+        # IMPORTANT: DirectML first on Windows - works without CUDA Toolkit installation
+        # CUDA often shows as "available" but fails at runtime if CUDA Toolkit not installed (Error 126)
+        # DirectML works with any GPU (NVIDIA, AMD, Intel) through Windows native APIs
         providers_to_try = []
-        if use_cuda:
-            providers_to_try.append(('CUDAExecutionProvider', 'NVIDIA GPU (CUDA)'))
         if use_dml:
             providers_to_try.append(('DmlExecutionProvider', 'Windows GPU (DirectML)'))
+        if use_cuda:
+            providers_to_try.append(('CUDAExecutionProvider', 'NVIDIA GPU (CUDA)'))
         providers_to_try.append(('CPUExecutionProvider', 'CPU (SLOW!)'))
         
         # Select initial provider (may fall back later if it fails)
