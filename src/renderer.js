@@ -105,6 +105,38 @@ const mainPage = document.getElementById('mainPage');
 const settingsPage = document.getElementById('settingsPage');
 const aboutPage = document.getElementById('aboutPage');
 const logsPage = document.getElementById('logsPage');
+const chatPage = document.getElementById('chatPage');
+
+// DOM Elements - Mode Tab Toggle
+const chatTabBtn = document.getElementById('chatTabBtn');
+const workerTabBtn = document.getElementById('workerTabBtn');
+
+// DOM Elements - Maximum Privacy Mode (Settings)
+const maxPrivacyToggle = document.getElementById('maxPrivacyToggle');
+const maxPrivacySwitch = document.getElementById('maxPrivacySwitch');
+const privacyModeBanner = document.getElementById('privacyModeBanner');
+const openPrivateChatBtn = document.getElementById('openPrivateChatBtn');
+
+// DOM Elements - Local Processing Toggle (Chat)
+const localProcessingToggle = document.getElementById('localProcessingToggle');
+const localProcessingSwitch = document.getElementById('localProcessingSwitch');
+const chatPrivacyBadge = document.getElementById('chatPrivacyBadge');
+const chatWelcomeText = document.getElementById('chatWelcomeText');
+
+// DOM Elements - Chat Page
+const chatMessages = document.getElementById('chatMessages');
+const chatInput = document.getElementById('chatInput');
+const chatSendBtn = document.getElementById('chatSendBtn');
+const chatModelSelect = document.getElementById('chatModelSelect');
+const chatImageBtn = document.getElementById('chatImageBtn');
+
+// Chat state
+let chatHistory = [];
+let isGeneratingChat = false;
+let imageMode = false;
+let maxPrivacyMode = false;
+let localProcessingMode = false;
+let currentMode = 'chat'; // 'chat' or 'worker'
 
 let isOnline = false;
 let currentConfig = {};
@@ -119,7 +151,7 @@ function formatTasks(count) {
 
 // Navigate between pages
 function showPage(pageId) {
-  [mainPage, settingsPage, aboutPage, logsPage].forEach(page => {
+  [mainPage, settingsPage, aboutPage, logsPage, chatPage].forEach(page => {
     if (page) page.classList.remove('active');
   });
   const targetPage = document.getElementById(pageId);
@@ -128,9 +160,22 @@ function showPage(pageId) {
   // Update settings icon state
   settingsBtn.classList.toggle('active', pageId === 'settingsPage');
   
+  // Update tab states
+  if (chatTabBtn) chatTabBtn.classList.toggle('active', pageId === 'chatPage');
+  if (workerTabBtn) workerTabBtn.classList.toggle('active', pageId === 'mainPage');
+  
+  // Track current mode
+  if (pageId === 'chatPage') currentMode = 'chat';
+  if (pageId === 'mainPage') currentMode = 'worker';
+  
   // Load logs when showing logs page
   if (pageId === 'logsPage') {
     loadLogs();
+  }
+  
+  // Load chat history when showing chat page
+  if (pageId === 'chatPage') {
+    loadChatHistory();
   }
 }
 
@@ -227,6 +272,9 @@ async function init() {
       }
     });
   }
+  
+  // Load chat history since Chat is now the default page
+  loadChatHistory();
 }
 
 // Update UI with status
@@ -1312,5 +1360,390 @@ if (window.electronAPI.onOllamaSetupComplete) {
   });
 }
 
+// ========== MAXIMUM PRIVACY MODE & LOCAL CHAT ==========
+
+// Update privacy mode UI
+async function updatePrivacyModeUI() {
+  try {
+    maxPrivacyMode = await window.electronAPI.getMaxPrivacyMode();
+    
+    // Update toggle switch
+    if (maxPrivacySwitch) {
+      maxPrivacySwitch.classList.toggle('active', maxPrivacyMode);
+    }
+    
+    // Show/hide privacy banner on main page
+    if (privacyModeBanner) {
+      privacyModeBanner.classList.toggle('visible', maxPrivacyMode);
+    }
+    
+    // Show/hide chat button in header
+    if (chatBtn) {
+      chatBtn.style.display = maxPrivacyMode ? 'flex' : 'none';
+    }
+    
+    // Disable network features in max privacy mode
+    if (onlineToggleBtn) {
+      onlineToggleBtn.disabled = maxPrivacyMode;
+      if (maxPrivacyMode) {
+        onlineToggleBtn.title = 'Disabled in Maximum Privacy Mode';
+      } else {
+        onlineToggleBtn.title = '';
+      }
+    }
+  } catch (err) {
+    console.error('Failed to update privacy mode UI:', err);
+  }
+}
+
+// Toggle maximum privacy mode
+if (maxPrivacyToggle) {
+  maxPrivacyToggle.addEventListener('click', async () => {
+    const newValue = !maxPrivacyMode;
+    await window.electronAPI.setMaxPrivacyMode(newValue);
+    await updatePrivacyModeUI();
+    
+    // If turning on max privacy and worker is online, go offline
+    if (newValue && isOnline) {
+      await window.electronAPI.toggleOnline();
+      const status = await window.electronAPI.getStatus();
+      updateUI(status);
+    }
+  });
+}
+
+// Mode tab toggle - Chat tab
+if (chatTabBtn) {
+  chatTabBtn.addEventListener('click', () => showPage('chatPage'));
+}
+
+// Mode tab toggle - Worker tab
+if (workerTabBtn) {
+  workerTabBtn.addEventListener('click', () => showPage('mainPage'));
+}
+
+// Local Processing Toggle in Chat
+if (localProcessingToggle) {
+  localProcessingToggle.addEventListener('click', async () => {
+    localProcessingMode = !localProcessingMode;
+    
+    // Update UI
+    if (localProcessingSwitch) {
+      localProcessingSwitch.classList.toggle('on', localProcessingMode);
+    }
+    if (localProcessingToggle) {
+      localProcessingToggle.classList.toggle('active', localProcessingMode);
+    }
+    if (chatPrivacyBadge) {
+      chatPrivacyBadge.style.display = localProcessingMode ? 'flex' : 'none';
+    }
+    if (chatWelcomeText) {
+      chatWelcomeText.textContent = localProcessingMode 
+        ? 'Your conversations are 100% local. Nothing is sent to any server.'
+        : 'Chat with AI powered by the ComputeGrid network. Toggle Local Processing for 100% offline mode.';
+    }
+    
+    // Show/hide model selector based on mode (only show for local processing)
+    if (chatModelSelect && chatModelSelect.parentElement) {
+      // Show model selector only in local processing mode
+      chatModelSelect.style.display = localProcessingMode ? 'block' : 'none';
+    }
+    
+    // Update chat title to reflect mode
+    const chatTitle = document.querySelector('.chat-title');
+    if (chatTitle) {
+      chatTitle.textContent = localProcessingMode ? 'AI Chat (Local)' : 'AI Chat';
+    }
+    
+    console.log('Local Processing Mode:', localProcessingMode ? 'ON' : 'OFF');
+  });
+}
+
+// Open private chat button (from privacy banner on worker page)
+if (openPrivateChatBtn) {
+  openPrivateChatBtn.addEventListener('click', () => {
+    localProcessingMode = true;
+    if (localProcessingSwitch) localProcessingSwitch.classList.add('on');
+    if (localProcessingToggle) localProcessingToggle.classList.add('active');
+    if (chatPrivacyBadge) chatPrivacyBadge.style.display = 'flex';
+    showPage('chatPage');
+  });
+}
+
+// Load chat history from local storage
+async function loadChatHistory() {
+  try {
+    const conversations = await window.electronAPI.loadLocalConversations();
+    chatHistory = conversations || [];
+    renderChatMessages();
+  } catch (err) {
+    console.error('Failed to load chat history:', err);
+    chatHistory = [];
+  }
+}
+
+// Save chat history to local storage
+async function saveChatHistory() {
+  try {
+    await window.electronAPI.saveLocalConversations(chatHistory);
+  } catch (err) {
+    console.error('Failed to save chat history:', err);
+  }
+}
+
+// Render chat messages
+function renderChatMessages() {
+  if (!chatMessages) return;
+  
+  if (chatHistory.length === 0) {
+    chatMessages.innerHTML = `
+      <div class="chat-welcome">
+        <div class="chat-welcome-icon">&#129302;</div>
+        <div class="chat-welcome-title">Private AI Assistant</div>
+        <div class="chat-welcome-text">Your conversations are 100% local. Nothing is sent to any server. Start chatting!</div>
+      </div>
+    `;
+    return;
+  }
+  
+  chatMessages.innerHTML = chatHistory.map((msg, idx) => `
+    <div class="chat-message ${msg.role}" data-idx="${idx}">
+      <div class="chat-message-avatar">${msg.role === 'user' ? 'U' : 'AI'}</div>
+      <div class="chat-message-content">
+        ${formatChatContent(msg.content)}
+        ${msg.image ? `<img class="chat-message-image" src="file://${msg.image}" alt="Generated image">` : ''}
+      </div>
+    </div>
+  `).join('');
+  
+  // Scroll to bottom
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// Format chat content (handle code blocks, etc.)
+function formatChatContent(content) {
+  if (!content) return '';
+  
+  // Escape HTML
+  let formatted = content
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  
+  // Handle code blocks
+  formatted = formatted.replace(/```([^`]+)```/g, '<pre><code>$1</code></pre>');
+  
+  // Handle inline code
+  formatted = formatted.replace(/`([^`]+)`/g, '<code>$1</code>');
+  
+  // Handle line breaks
+  formatted = formatted.replace(/\n/g, '<br>');
+  
+  return formatted;
+}
+
+// Add thinking indicator
+function addThinkingIndicator() {
+  const thinkingHtml = `
+    <div class="chat-message assistant" id="chatThinking">
+      <div class="chat-message-avatar">AI</div>
+      <div class="chat-message-content">
+        <div class="chat-thinking">
+          <span></span><span></span><span></span>
+        </div>
+      </div>
+    </div>
+  `;
+  chatMessages.insertAdjacentHTML('beforeend', thinkingHtml);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// Remove thinking indicator
+function removeThinkingIndicator() {
+  const thinking = document.getElementById('chatThinking');
+  if (thinking) thinking.remove();
+}
+
+// Send chat message
+async function sendChatMessage() {
+  const message = chatInput.value.trim();
+  if (!message || isGeneratingChat) return;
+  
+  isGeneratingChat = true;
+  chatSendBtn.disabled = true;
+  chatInput.value = '';
+  
+  // Add user message to history
+  chatHistory.push({ role: 'user', content: message });
+  renderChatMessages();
+  
+  // Add thinking indicator
+  addThinkingIndicator();
+  
+  try {
+    const model = chatModelSelect.value;
+    
+    if (imageMode) {
+      // Generate image (always local for now)
+      const result = await window.electronAPI.localImageGenerate(message);
+      removeThinkingIndicator();
+      
+      if (result.success) {
+        chatHistory.push({ role: 'assistant', content: 'Here\'s your generated image:', image: result.path });
+      } else {
+        chatHistory.push({ role: 'assistant', content: `Failed to generate image: ${result.error}` });
+      }
+    } else if (localProcessingMode) {
+      // Local Processing Mode: Use local Ollama
+      const conversationForOllama = chatHistory.slice(-10);
+      await window.electronAPI.localChatStream(message, model, conversationForOllama.slice(0, -1));
+    } else {
+      // Server Mode: Use ComputeGrid network API
+      try {
+        const result = await window.electronAPI.serverChatSend(message, chatHistory.slice(-10));
+        removeThinkingIndicator();
+        
+        if (result.success) {
+          chatHistory.push({ role: 'assistant', content: result.content });
+        } else {
+          // Fallback to local if server fails
+          console.log('Server chat failed, falling back to local:', result.error);
+          chatHistory.push({ role: 'assistant', content: `Server error: ${result.error}. Enable Local Processing for offline mode.` });
+        }
+        renderChatMessages();
+      } catch (serverErr) {
+        removeThinkingIndicator();
+        chatHistory.push({ role: 'assistant', content: `Network error. Enable Local Processing for offline mode.` });
+        renderChatMessages();
+      }
+    }
+  } catch (err) {
+    removeThinkingIndicator();
+    chatHistory.push({ role: 'assistant', content: `Error: ${err.message}` });
+    renderChatMessages();
+  }
+  
+  isGeneratingChat = false;
+  chatSendBtn.disabled = false;
+  await saveChatHistory();
+}
+
+// Chat send button
+if (chatSendBtn) {
+  chatSendBtn.addEventListener('click', sendChatMessage);
+}
+
+// Chat input enter key
+if (chatInput) {
+  chatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendChatMessage();
+    }
+  });
+  
+  // Auto-resize textarea
+  chatInput.addEventListener('input', () => {
+    chatInput.style.height = 'auto';
+    chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
+  });
+}
+
+// Toggle image mode
+if (chatImageBtn) {
+  chatImageBtn.addEventListener('click', () => {
+    imageMode = !imageMode;
+    chatImageBtn.classList.toggle('active', imageMode);
+    chatInput.placeholder = imageMode ? 'Describe the image you want...' : 'Type a message...';
+  });
+}
+
+// Listen for streaming chat tokens
+if (window.electronAPI.onLocalChatToken) {
+  let streamingContent = '';
+  
+  window.electronAPI.onLocalChatToken((token) => {
+    removeThinkingIndicator();
+    streamingContent += token;
+    
+    // Update or add streaming message
+    const existingStreaming = document.getElementById('chatStreaming');
+    if (existingStreaming) {
+      existingStreaming.querySelector('.chat-message-content').innerHTML = formatChatContent(streamingContent);
+    } else {
+      const streamingHtml = `
+        <div class="chat-message assistant" id="chatStreaming">
+          <div class="chat-message-avatar">AI</div>
+          <div class="chat-message-content">${formatChatContent(streamingContent)}</div>
+        </div>
+      `;
+      chatMessages.insertAdjacentHTML('beforeend', streamingHtml);
+    }
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  });
+  
+  window.electronAPI.onLocalChatComplete((response) => {
+    // Finalize the streaming message
+    const streamingEl = document.getElementById('chatStreaming');
+    if (streamingEl) {
+      streamingEl.removeAttribute('id');
+    }
+    
+    // Add to history
+    chatHistory.push({ role: 'assistant', content: streamingContent });
+    streamingContent = '';
+    
+    isGeneratingChat = false;
+    chatSendBtn.disabled = false;
+    saveChatHistory();
+  });
+  
+  window.electronAPI.onLocalChatError((error) => {
+    removeThinkingIndicator();
+    const streamingEl = document.getElementById('chatStreaming');
+    if (streamingEl) {
+      streamingEl.remove();
+    }
+    
+    chatHistory.push({ role: 'assistant', content: `Error: ${error}` });
+    renderChatMessages();
+    
+    isGeneratingChat = false;
+    chatSendBtn.disabled = false;
+    streamingContent = '';
+    saveChatHistory();
+  });
+}
+
+// Listen for image generation events
+if (window.electronAPI.onLocalImageComplete) {
+  window.electronAPI.onLocalImageComplete((imagePath) => {
+    removeThinkingIndicator();
+    chatHistory.push({ role: 'assistant', content: 'Here\'s your generated image:', image: imagePath });
+    renderChatMessages();
+    isGeneratingChat = false;
+    chatSendBtn.disabled = false;
+    saveChatHistory();
+  });
+}
+
+if (window.electronAPI.onLocalImageError) {
+  window.electronAPI.onLocalImageError((error) => {
+    removeThinkingIndicator();
+    chatHistory.push({ role: 'assistant', content: `Failed to generate image: ${error}` });
+    renderChatMessages();
+    isGeneratingChat = false;
+    chatSendBtn.disabled = false;
+    saveChatHistory();
+  });
+}
+
+// ========== END MAXIMUM PRIVACY MODE ==========
+
 // Initialize on load
+async function initPrivacyMode() {
+  await updatePrivacyModeUI();
+}
+
 init();
+initPrivacyMode();

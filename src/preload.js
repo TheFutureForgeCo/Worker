@@ -55,6 +55,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getBundlePaths: () => ipcRenderer.invoke('get-bundle-paths'),
   installBundle: () => ipcRenderer.invoke('install-bundle'),
   
+  // Maximum Privacy Mode & Local Chat
+  setMaxPrivacyMode: (enabled) => ipcRenderer.invoke('set-max-privacy-mode', enabled),
+  getMaxPrivacyMode: () => ipcRenderer.invoke('get-max-privacy-mode'),
+  
+  // Local chat (direct Ollama communication)
+  localChatSend: (message, model, conversationHistory) => ipcRenderer.invoke('local-chat-send', message, model, conversationHistory),
+  localChatStream: (message, model, conversationHistory) => ipcRenderer.invoke('local-chat-stream', message, model, conversationHistory),
+  localImageGenerate: (prompt) => ipcRenderer.invoke('local-image-generate', prompt),
+  
+  // Server chat (ComputeGrid network API)
+  serverChatSend: (message, conversationHistory) => ipcRenderer.invoke('server-chat-send', message, conversationHistory),
+  
+  // Local conversation storage
+  saveLocalConversations: (conversations) => ipcRenderer.invoke('save-local-conversations', conversations),
+  loadLocalConversations: () => ipcRenderer.invoke('load-local-conversations'),
+  clearLocalConversations: () => ipcRenderer.invoke('clear-local-conversations'),
+  
   // Event listeners
   onStatusUpdate: (callback) => {
     ipcRenderer.on('status-update', (event, data) => callback(data));
@@ -108,5 +125,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   onBundleStatus: (callback) => {
     ipcRenderer.on('bundle-status', (event, status) => callback(status));
+  },
+  
+  // Local chat streaming events
+  onLocalChatToken: (callback) => {
+    ipcRenderer.on('local-chat-token', (event, token) => callback(token));
+  },
+  onLocalChatComplete: (callback) => {
+    ipcRenderer.on('local-chat-complete', (event, response) => callback(response));
+  },
+  onLocalChatError: (callback) => {
+    ipcRenderer.on('local-chat-error', (event, error) => callback(error));
+  },
+  onLocalImageComplete: (callback) => {
+    ipcRenderer.on('local-image-complete', (event, imagePath) => callback(imagePath));
+  },
+  onLocalImageError: (callback) => {
+    ipcRenderer.on('local-image-error', (event, error) => callback(error));
   }
 });

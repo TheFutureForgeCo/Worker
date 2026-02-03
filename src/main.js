@@ -1189,6 +1189,15 @@ async function deleteModel(modelName) {
 async function toggleOnlineStatus() {
   log(`toggleOnlineStatus called - apiKey: ${config.apiKey ? 'present (' + config.apiKey.substring(0, 10) + '...)' : 'MISSING'}`);
   
+  // Block network calls in Maximum Privacy Mode
+  if (config.maxPrivacyMode) {
+    log('[Privacy] toggleOnlineStatus blocked - Maximum Privacy Mode enabled');
+    stats.status = 'Privacy Mode Active';
+    stats.lastError = 'Maximum Privacy Mode is enabled - no server connections allowed';
+    sendStatusToRenderer();
+    return false;
+  }
+  
   if (!config.apiKey) {
     logError('API key required to go online');
     stats.status = 'API key required';
@@ -1241,6 +1250,13 @@ async function toggleOnlineStatus() {
 // Make HTTP request helper
 function makeRequest(url, options = {}) {
   return new Promise((resolve, reject) => {
+    // Centralized privacy mode check - block all server requests
+    if (config.maxPrivacyMode && url.includes(SERVER_URL)) {
+      log(`[makeRequest] BLOCKED by Maximum Privacy Mode: ${url}`);
+      reject(new Error('Maximum Privacy Mode is enabled - no server connections allowed'));
+      return;
+    }
+    
     log(`[makeRequest] ${options.method || 'GET'} ${url}`);
     
     const parsedUrl = new URL(url);
@@ -1300,6 +1316,12 @@ function makeRequest(url, options = {}) {
 
 // Validate API key with server
 async function validateApiKey(apiKey) {
+  // Block network calls in Maximum Privacy Mode
+  if (config.maxPrivacyMode) {
+    log('[Privacy] validateApiKey blocked - Maximum Privacy Mode enabled');
+    return { valid: false, error: 'Maximum Privacy Mode is enabled - no server connections allowed' };
+  }
+  
   log('Validating API key...');
   try {
     const result = await makeRequest(`${SERVER_URL}/api/worker/validate`, {
@@ -1323,6 +1345,15 @@ async function validateApiKey(apiKey) {
 // Start the worker
 async function startWorker() {
   earlyLog('startWorker() called');
+  
+  // Block worker start in Maximum Privacy Mode
+  if (config.maxPrivacyMode) {
+    earlyLog('[Privacy] startWorker blocked - Maximum Privacy Mode enabled');
+    log('[Privacy] Worker start blocked - Maximum Privacy Mode enabled');
+    stats.status = 'Privacy Mode Active';
+    sendStatusToRenderer();
+    return;
+  }
   
   if (isWorkerRunning) {
     earlyLog('Worker already running, returning');
@@ -1507,6 +1538,7 @@ async function startWorker() {
         CG_USER_DATA: app.getPath('userData'),  // Pass userData path for image AI
         CG_IMAGE_QUALITY_TIER: config.imageQualityTier || 'none',  // Pass image quality tier from benchmark
         CG_IMAGE_BENCHMARK_MS: String(config.imageBenchmarkTimeMs || 0),  // Pass benchmark time
+        CG_MAX_PRIVACY_MODE: config.maxPrivacyMode ? '1' : '0',  // Pass privacy mode (safety check)
         ELECTRON_RUN_AS_NODE: '1'  // Critical: tells Electron to run as Node.js
       },
       stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
@@ -2031,8 +2063,8 @@ async function checkAndRunBenchmarkIfNeeded() {
     
     log(`[ImageAI] Using fallback tier: ${config.imageQualityTier} (based on ${vramGb}GB VRAM)`);
     
-    // Report fallback tier to server
-    if (config.apiKey) {
+    // Report fallback tier to server (blocked in Maximum Privacy Mode)
+    if (config.apiKey && !config.maxPrivacyMode) {
       try {
         const response = await fetch(`${SERVER_URL}/api/worker/report-benchmark`, {
           method: 'POST',
@@ -2054,6 +2086,8 @@ async function checkAndRunBenchmarkIfNeeded() {
       } catch (err) {
         log('[ImageAI] Error reporting fallback tier: ' + err.message);
       }
+    } else if (config.maxPrivacyMode) {
+      log('[ImageAI] [Privacy] Skipping benchmark report - Maximum Privacy Mode enabled');
     }
     
     // Notify UI
@@ -2094,8 +2128,8 @@ async function reportBenchmarkResult(benchmarkTimeMs) {
   sendStatusToRenderer();
   log(`Benchmark completed: ${benchmarkTimeMs}ms, tier: ${config.imageQualityTier}`);
   
-  // Report to server
-  if (config.apiKey) {
+  // Report to server (blocked in Maximum Privacy Mode)
+  if (config.apiKey && !config.maxPrivacyMode) {
     try {
       const response = await fetch(`${SERVER_URL}/api/worker/report-benchmark`, {
         method: 'POST',
@@ -2176,6 +2210,325 @@ ipcMain.handle('install-bundle', async () => {
 });
 
 // ========== END BUNDLE MANAGEMENT ==========
+
+// ========== MAXIMUM PRIVACY MODE & LOCAL CHAT ==========
+const LOCAL_CONVERSATIONS_FILE = path.join(app.getPath('userData'), 'local-conversations.json');
+
+// Set maximum privacy mode
+ipcMain.handle('set-max-privacy-mode', async (event, enabled) => {
+  log(`[Privacy] Setting maximum privacy mode: ${enabled}`);
+  config.maxPrivacyMode = enabled;
+  saveConfig();
+  sendStatusToRenderer();
+  return true;
+});
+
+// Get maximum privacy mode status
+ipcMain.handle('get-max-privacy-mode', async () => {
+  return config.maxPrivacyMode || false;
+});
+
+// Local chat send - direct Ollama communication (no server)
+ipcMain.handle('local-chat-send', async (event, message, model, conversationHistory) => {
+  log(`[LocalChat] Sending message to ${model}: ${message.substring(0, 50)}...`);
+  
+  try {
+    // Map friendly model names to actual Ollama model names
+    const modelMap = {
+      'mistral': 'mistral:7b',
+      'tinyllama': 'tinyllama:1.1b'
+    };
+    const ollamaModel = modelMap[model] || 'mistral:7b';
+    
+    // Build messages array for Ollama
+    const messages = conversationHistory.map(msg => ({
+      role: msg.role,
+      content: msg.content
+    }));
+    messages.push({ role: 'user', content: message });
+    
+    // Call Ollama directly
+    const response = await fetch(`${OLLAMA_HOST}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: ollamaModel,
+        messages: messages,
+        stream: false
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Ollama error: ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    log(`[LocalChat] Response received from ${ollamaModel}`);
+    
+    return {
+      success: true,
+      content: data.message?.content || '',
+      model: ollamaModel
+    };
+  } catch (err) {
+    log(`[LocalChat] Error: ${err.message}`);
+    return {
+      success: false,
+      error: err.message
+    };
+  }
+});
+
+// Local chat stream - streaming Ollama communication
+ipcMain.handle('local-chat-stream', async (event, message, model, conversationHistory) => {
+  log(`[LocalChat] Starting stream to ${model}: ${message.substring(0, 50)}...`);
+  
+  try {
+    const modelMap = {
+      'mistral': 'mistral:7b',
+      'tinyllama': 'tinyllama:1.1b'
+    };
+    const ollamaModel = modelMap[model] || 'mistral:7b';
+    
+    const messages = conversationHistory.map(msg => ({
+      role: msg.role,
+      content: msg.content
+    }));
+    messages.push({ role: 'user', content: message });
+    
+    const response = await fetch(`${OLLAMA_HOST}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: ollamaModel,
+        messages: messages,
+        stream: true
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Ollama error: ${response.statusText}`);
+    }
+    
+    let fullContent = '';
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      const chunk = decoder.decode(value, { stream: true });
+      const lines = chunk.split('\n').filter(line => line.trim());
+      
+      for (const line of lines) {
+        try {
+          const data = JSON.parse(line);
+          if (data.message?.content) {
+            fullContent += data.message.content;
+            if (mainWindow) {
+              mainWindow.webContents.send('local-chat-token', data.message.content);
+            }
+          }
+        } catch (e) {
+          // Ignore JSON parse errors for incomplete chunks
+        }
+      }
+    }
+    
+    if (mainWindow) {
+      mainWindow.webContents.send('local-chat-complete', fullContent);
+    }
+    
+    return { success: true, content: fullContent };
+  } catch (err) {
+    log(`[LocalChat] Stream error: ${err.message}`);
+    if (mainWindow) {
+      mainWindow.webContents.send('local-chat-error', err.message);
+    }
+    return { success: false, error: err.message };
+  }
+});
+
+// Local image generation - direct ONNX Runtime (no server)
+ipcMain.handle('local-image-generate', async (event, prompt) => {
+  log(`[LocalImage] Generating image for prompt: ${prompt.substring(0, 50)}...`);
+  
+  try {
+    const aiPaths = getAiPaths();
+    
+    if (!config.imageAiInstalled && !aiPaths.useBundled) {
+      throw new Error('Image AI is not installed');
+    }
+    
+    // Generate a unique filename
+    const timestamp = Date.now();
+    const outputDir = path.join(app.getPath('userData'), 'local-images');
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+    const outputPath = path.join(outputDir, `local_${timestamp}.png`);
+    
+    // Get Python executable and script paths
+    const pythonExe = aiPaths.pythonExe;
+    const scriptPath = aiPaths.imageGenScript || getSourcePath('sd_inference.py');
+    const modelPath = aiPaths.sdModelPath;
+    
+    // Run the inference script
+    const result = await new Promise((resolve, reject) => {
+      const args = [
+        scriptPath,
+        '--prompt', prompt,
+        '--output', outputPath,
+        '--width', '512',
+        '--height', '512',
+        '--steps', '20'
+      ];
+      
+      if (modelPath) {
+        args.push('--model-path', modelPath);
+      }
+      
+      const proc = spawn(pythonExe, args, {
+        env: { ...process.env, PYTHONUNBUFFERED: '1' }
+      });
+      
+      let stderr = '';
+      proc.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+      
+      proc.on('close', (code) => {
+        if (code === 0 && fs.existsSync(outputPath)) {
+          resolve({ success: true, path: outputPath });
+        } else {
+          reject(new Error(stderr || `Process exited with code ${code}`));
+        }
+      });
+      
+      proc.on('error', reject);
+    });
+    
+    if (mainWindow) {
+      mainWindow.webContents.send('local-image-complete', result.path);
+    }
+    
+    log(`[LocalImage] Image generated: ${result.path}`);
+    return result;
+  } catch (err) {
+    log(`[LocalImage] Error: ${err.message}`);
+    if (mainWindow) {
+      mainWindow.webContents.send('local-image-error', err.message);
+    }
+    return { success: false, error: err.message };
+  }
+});
+
+// Server chat send - use ComputeGrid network API
+ipcMain.handle('server-chat-send', async (event, message, conversationHistory) => {
+  log(`[ServerChat] Sending message to server: ${message.substring(0, 50)}...`);
+  
+  try {
+    // CRITICAL: Block server calls in Maximum Privacy Mode
+    if (config.maxPrivacyMode) {
+      log('[ServerChat] BLOCKED - Maximum Privacy Mode is enabled');
+      return {
+        success: false,
+        error: 'Maximum Privacy Mode is enabled. Server chat is disabled. Use Local Processing instead.'
+      };
+    }
+    
+    // Check if we have an API key
+    if (!config.apiKey) {
+      return {
+        success: false,
+        error: 'No API key configured. Please add your API key in the Worker tab.'
+      };
+    }
+    
+    // Call the ComputeGrid chat API (conversation history is managed server-side)
+    const response = await fetch(`${SERVER_URL}/api/chat/send`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${config.apiKey}`
+      },
+      body: JSON.stringify({
+        message: message,
+        settings: {
+          useCredits: false,
+          responseLength: 'medium',
+          priority: 'standard'
+        }
+      })
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Server error: ${response.status} - ${errorText}`);
+    }
+    
+    const data = await response.json();
+    log(`[ServerChat] Response received from server`);
+    
+    // The server returns assistantMessage with content
+    return {
+      success: true,
+      content: data.assistantMessage?.content || 'No response received'
+    };
+  } catch (err) {
+    log(`[ServerChat] Error: ${err.message}`);
+    return {
+      success: false,
+      error: err.message
+    };
+  }
+});
+
+// Save local conversations
+ipcMain.handle('save-local-conversations', async (event, conversations) => {
+  try {
+    fs.writeFileSync(LOCAL_CONVERSATIONS_FILE, JSON.stringify(conversations, null, 2));
+    return true;
+  } catch (err) {
+    log(`[LocalChat] Failed to save conversations: ${err.message}`);
+    return false;
+  }
+});
+
+// Load local conversations
+ipcMain.handle('load-local-conversations', async () => {
+  try {
+    if (fs.existsSync(LOCAL_CONVERSATIONS_FILE)) {
+      const data = fs.readFileSync(LOCAL_CONVERSATIONS_FILE, 'utf8');
+      return JSON.parse(data);
+    }
+    return [];
+  } catch (err) {
+    log(`[LocalChat] Failed to load conversations: ${err.message}`);
+    return [];
+  }
+});
+
+// Clear local conversations
+ipcMain.handle('clear-local-conversations', async () => {
+  try {
+    if (fs.existsSync(LOCAL_CONVERSATIONS_FILE)) {
+      fs.unlinkSync(LOCAL_CONVERSATIONS_FILE);
+    }
+    // Also clear local images
+    const localImagesDir = path.join(app.getPath('userData'), 'local-images');
+    if (fs.existsSync(localImagesDir)) {
+      fs.rmSync(localImagesDir, { recursive: true, force: true });
+    }
+    return true;
+  } catch (err) {
+    log(`[LocalChat] Failed to clear conversations: ${err.message}`);
+    return false;
+  }
+});
+
+// ========== END MAXIMUM PRIVACY MODE ==========
 
 // Retry benchmark manually from UI
 ipcMain.handle('retry-image-benchmark', async () => {
@@ -3747,8 +4100,8 @@ ipcMain.handle('download-image-ai', async () => {
           
           log(`[ImageAI] Using fallback tier: ${config.imageQualityTier} (based on ${vramGb}GB VRAM)`);
           
-          // Report fallback tier to server so worker can claim image tasks
-          if (config.apiKey) {
+          // Report fallback tier to server so worker can claim image tasks (blocked in Maximum Privacy Mode)
+          if (config.apiKey && !config.maxPrivacyMode) {
             try {
               const response = await fetch(`${SERVER_URL}/api/worker/report-benchmark`, {
                 method: 'POST',

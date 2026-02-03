@@ -54,6 +54,15 @@ const API_KEY = process.env.CG_API_KEY || '';
 const SERVER_URL = process.env.CG_SERVER_URL || '';
 const APP_VERSION = process.env.CG_APP_VERSION || '1.0.0';
 const APP_SIGNATURE = process.env.CG_APP_SIGNATURE || 'desktop';
+const MAX_PRIVACY_MODE = process.env.CG_MAX_PRIVACY_MODE === '1';
+
+// CRITICAL: Exit immediately if Maximum Privacy Mode is enabled
+// This is a safety check - the worker should never be spawned in privacy mode
+if (MAX_PRIVACY_MODE) {
+  earlyLog('[Privacy] WORKER BLOCKED - Maximum Privacy Mode is enabled');
+  earlyLog('Exiting worker process to ensure zero server connections');
+  process.exit(0);
+}
 
 // Settings
 const POLL_INTERVAL_MS = 5000;
