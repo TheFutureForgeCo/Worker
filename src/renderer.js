@@ -941,12 +941,23 @@ if (clearBenchmarkLogsBtn) {
   });
 }
 
+// Helper function to strip ANSI escape codes from text
+function stripAnsiCodes(text) {
+  // Remove ANSI escape sequences (colors, formatting, etc.)
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/\x1B\[[0-9;]*[A-Za-z]/g, '')
+             .replace(/\[0;[0-9]+m/g, '')
+             .replace(/\[m/g, '');
+}
+
 // Copy benchmark logs to clipboard
 if (copyBenchmarkLogsBtn) {
   copyBenchmarkLogsBtn.addEventListener('click', async () => {
     if (benchmarkLogsContent && benchmarkLogsContent.textContent) {
       try {
-        await navigator.clipboard.writeText(benchmarkLogsContent.textContent);
+        // Strip ANSI escape codes and copy full text
+        const cleanText = stripAnsiCodes(benchmarkLogsContent.textContent);
+        await navigator.clipboard.writeText(cleanText);
         const originalText = copyBenchmarkLogsBtn.textContent;
         copyBenchmarkLogsBtn.textContent = 'Copied!';
         copyBenchmarkLogsBtn.style.color = '#0f0';
