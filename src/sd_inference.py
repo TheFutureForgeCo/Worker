@@ -272,8 +272,10 @@ def main():
         log("-" * 40)
         
         # Create a proper random generator for reproducible results
-        # Note: ONNX Runtime uses numpy for random state
-        generator = np.random.RandomState(seed)
+        # Use torch.Generator for reproducible random state
+        # Note: diffusers pipeline expects torch.Generator, not numpy.random.RandomState
+        generator = torch.Generator()
+        generator.manual_seed(seed)
         log(f"Random seed set: {seed}")
         
         num_steps = 20 if is_benchmark else 25

@@ -3124,21 +3124,25 @@ async function installPythonDeps() {
   }
   
   // Step 5: Install the appropriate ONNX Runtime for this GPU
+  // IMPORTANT: On Windows, ALWAYS use DirectML - it works with ANY GPU (NVIDIA, AMD, Intel)
+  // via Windows native APIs and doesn't require CUDA Toolkit installation
   log('[Deps] Step 5/7: Installing ONNX Runtime...');
   
   let onnxRuntimePackage = 'onnxruntime';  // CPU fallback
-  if (hasNvidiaGpu) {
+  if (process.platform === 'win32') {
+    // Windows: Always use DirectML for ALL GPUs (NVIDIA, AMD, Intel)
+    // DirectML uses Windows native GPU APIs - no CUDA Toolkit needed
+    onnxRuntimePackage = 'onnxruntime-directml';
+    log('[Deps] Installing onnxruntime-directml for Windows GPU acceleration...');
+    if (mainWindow) {
+      mainWindow.webContents.send('image-ai-deps-progress', 'Installing ONNX Runtime DirectML for GPU...');
+    }
+  } else if (hasNvidiaGpu) {
+    // Linux with NVIDIA: Use CUDA (requires CUDA Toolkit)
     onnxRuntimePackage = 'onnxruntime-gpu==1.16.3';
-    log('[Deps] Installing onnxruntime-gpu for NVIDIA CUDA...');
+    log('[Deps] Installing onnxruntime-gpu for Linux NVIDIA CUDA...');
     if (mainWindow) {
       mainWindow.webContents.send('image-ai-deps-progress', 'Installing ONNX Runtime for NVIDIA GPU...');
-    }
-  } else if (process.platform === 'win32') {
-    // Intel/AMD on Windows use DirectML
-    onnxRuntimePackage = 'onnxruntime-directml';
-    log('[Deps] Installing onnxruntime-directml for Intel/AMD GPU...');
-    if (mainWindow) {
-      mainWindow.webContents.send('image-ai-deps-progress', 'Installing ONNX Runtime DirectML for Intel/AMD GPU...');
     }
   } else {
     log('[Deps] Installing onnxruntime CPU version...');
