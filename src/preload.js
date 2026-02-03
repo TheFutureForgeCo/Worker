@@ -62,7 +62,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Local chat (direct Ollama communication)
   localChatSend: (message, model, conversationHistory) => ipcRenderer.invoke('local-chat-send', message, model, conversationHistory),
   localChatStream: (message, model, conversationHistory) => ipcRenderer.invoke('local-chat-stream', message, model, conversationHistory),
-  localImageGenerate: (prompt) => ipcRenderer.invoke('local-image-generate', prompt),
+  localImageGenerate: (prompt, quality) => ipcRenderer.invoke('local-image-generate', prompt, quality),
   
   // Server chat (ComputeGrid network API)
   serverChatSend: (message, conversationHistory) => ipcRenderer.invoke('server-chat-send', message, conversationHistory),

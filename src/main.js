@@ -1887,6 +1887,7 @@ ipcMain.handle('open-external', (event, url) => {
 // Image AI management
 const IMAGE_AI_DIR = path.join(app.getPath('userData'), 'image-ai');
 const SD_MODEL_DIR = path.join(IMAGE_AI_DIR, 'sd-onnx'); // ONNX models are stored in a directory
+const SDXL_MODEL_DIR = path.join(IMAGE_AI_DIR, 'sdxl-onnx'); // SDXL ONNX model directory
 const SD_MODEL_PATH = SD_MODEL_DIR; // For compatibility with existing code
 const PYTHON_DIR = path.join(IMAGE_AI_DIR, 'python');
 // python-build-standalone extracts to a 'python/' subfolder containing bin/
@@ -1894,10 +1895,12 @@ const PYTHON_EXE = process.platform === 'win32'
   ? path.join(PYTHON_DIR, 'python', 'python.exe')
   : path.join(PYTHON_DIR, 'python', 'bin', 'python3');
 
-// ONNX model ID from Hugging Face - will be downloaded automatically by diffusers
+// ONNX model IDs from Hugging Face - will be downloaded automatically by diffusers
 const SD_ONNX_MODEL_ID = 'runwayml/stable-diffusion-v1-5';
+const SDXL_ONNX_MODEL_ID = 'stabilityai/stable-diffusion-xl-base-1.0';
 // The model is downloaded on first use, so we check for the model_index.json file
 const SD_MODEL_INDEX_PATH = path.join(SD_MODEL_DIR, 'model_index.json');
+const SDXL_MODEL_INDEX_PATH = path.join(SDXL_MODEL_DIR, 'model_index.json');
 
 // Portable Python URLs for each platform
 const PYTHON_URLS = {
@@ -2351,8 +2354,8 @@ ipcMain.handle('local-chat-stream', async (event, message, model, conversationHi
 });
 
 // Local image generation - direct ONNX Runtime (no server)
-ipcMain.handle('local-image-generate', async (event, prompt) => {
-  log(`[LocalImage] Generating image for prompt: ${prompt.substring(0, 50)}...`);
+ipcMain.handle('local-image-generate', async (event, prompt, quality = 'standard') => {
+  log(`[LocalImage] Generating image for prompt: ${prompt.substring(0, 50)}... (quality: ${quality})`);
   
   try {
     const aiPaths = getAiPaths();
@@ -2372,16 +2375,25 @@ ipcMain.handle('local-image-generate', async (event, prompt) => {
     // Get Python executable and script paths
     const pythonExe = aiPaths.pythonExe;
     const scriptPath = aiPaths.imageGenScript || getSourcePath('sd_inference.py');
-    const modelPath = aiPaths.sdModelPath || SD_MODEL_DIR;
+    
+    // Select model based on quality setting
+    const useSDXL = quality === 'high';
+    const modelPath = useSDXL ? SDXL_MODEL_DIR : (aiPaths.sdModelPath || SD_MODEL_DIR);
+    const modelId = useSDXL ? SDXL_ONNX_MODEL_ID : SD_ONNX_MODEL_ID;
+    
+    // SDXL uses 1024x1024 base resolution, SD 1.5 uses 512x512
+    const imageSize = useSDXL ? 1024 : 512;
     
     // Run the inference script with JSON input (same format as generateImage)
     const result = await new Promise((resolve, reject) => {
       const inputData = JSON.stringify({
         prompt: prompt,
         seed: Math.floor(Math.random() * 2147483647),
-        width: 512,
-        height: 512,
+        width: imageSize,
+        height: imageSize,
         model_dir: modelPath,
+        model_id: modelId,
+        use_sdxl: useSDXL,
         is_benchmark: false,
         output_path: outputPath
       });

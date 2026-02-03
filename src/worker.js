@@ -768,6 +768,7 @@ const USER_DATA_DIR = process.env.CG_USER_DATA || path.join(os.homedir(), '.comp
 const IMAGE_AI_DIR = path.join(USER_DATA_DIR, 'image-ai');
 const PYTHON_DIR = path.join(IMAGE_AI_DIR, 'python');
 const SD_ONNX_MODEL_DIR = path.join(IMAGE_AI_DIR, 'sd-onnx');
+const SDXL_ONNX_MODEL_DIR = path.join(IMAGE_AI_DIR, 'sdxl-onnx');
 const SD_ONNX_MODEL_INDEX = path.join(SD_ONNX_MODEL_DIR, 'model_index.json');
 // python-build-standalone extracts to a 'python/' subfolder
 const PYTHON_EXE = process.platform === 'win32'
@@ -923,7 +924,7 @@ function invalidateSdScriptCache() {
 }
 
 // Generate image using embedded Python + diffusers
-async function callEmbeddedSdGenerate(prompt, width, height, seed, tileX, tileY, totalTilesX, totalTilesY, tileOverlap) {
+async function callEmbeddedSdGenerate(prompt, width, height, seed, tileX, tileY, totalTilesX, totalTilesY, tileOverlap, useSDXL = false) {
   return new Promise((resolve, reject) => {
     const { spawn } = require('child_process');
     
@@ -945,19 +946,27 @@ async function callEmbeddedSdGenerate(prompt, width, height, seed, tileX, tileY,
       : '';
     const fullPrompt = prompt + regionHint;
     
+    // Use appropriate model based on quality setting
+    const modelId = useSDXL ? 'stabilityai/stable-diffusion-xl-base-1.0' : 'runwayml/stable-diffusion-v1-5';
+    const modelDir = useSDXL ? SDXL_ONNX_MODEL_DIR : SD_ONNX_MODEL_DIR;
+    
     const inputData = JSON.stringify({
       prompt: fullPrompt,
       seed: seed,
       width: width,
       height: height,
-      model_dir: SD_ONNX_MODEL_DIR,
+      model_dir: modelDir,
+      model_id: modelId,
       is_benchmark: false,
+      use_sdxl: useSDXL,
       tile_x: tileX,
       tile_y: tileY,
       total_tiles_x: totalTilesX,
       total_tiles_y: totalTilesY,
       tile_overlap: tileOverlap || 64
     });
+    
+    log(`[SD] Using ${useSDXL ? 'SDXL (High Quality)' : 'SD 1.5 (Standard Quality)'} model`);
     
     log(`[SD] Starting Python inference: ${width}x${height}, seed=${seed}`);
     
@@ -1081,11 +1090,14 @@ async function generateImageTile(taskData) {
       };
     }
     
+    // Check if SDXL (high quality) is requested - from task data or environment
+    const useSDXL = taskData.imageQuality === 'high' || taskData.useSDXL === true;
+    
     // Generate using embedded Python + diffusers
-    log(`Calling embedded SD for tile [${tileX},${tileY}]...`);
+    log(`Calling embedded SD for tile [${tileX},${tileY}] (quality: ${useSDXL ? 'high/SDXL' : 'standard/SD1.5'})...`);
     const sdResult = await callEmbeddedSdGenerate(
       prompt, tileWidth, tileHeight, seed,
-      tileX, tileY, totalTilesX, totalTilesY, tileOverlap
+      tileX, tileY, totalTilesX, totalTilesY, tileOverlap, useSDXL
     );
     
     const result = {

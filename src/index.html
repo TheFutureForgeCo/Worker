@@ -1509,6 +1509,68 @@
       color: white;
     }
 
+    /* Image Quality Toggle */
+    .image-quality-toggle {
+      display: flex;
+      gap: 8px;
+      padding: 8px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      margin-left: 4px;
+    }
+
+    .quality-option {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all var(--transition);
+      border: 1px solid transparent;
+    }
+
+    .quality-option:hover {
+      background: var(--bg-elevated);
+    }
+
+    .quality-option.selected {
+      background: hsla(199, 89%, 48%, 0.1);
+      border-color: var(--primary);
+    }
+
+    .quality-radio {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      border: 2px solid var(--text-muted);
+      transition: all var(--transition);
+    }
+
+    .quality-radio.selected {
+      border-color: var(--primary);
+      background: var(--primary);
+      box-shadow: inset 0 0 0 3px var(--bg-tertiary);
+    }
+
+    .quality-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .quality-label {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+
+    .quality-desc {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
     /* Maximum Privacy indicator in main page */
     .privacy-mode-banner {
       display: none;
@@ -1683,6 +1745,22 @@
               <option value="tinyllama">TinyLlama</option>
             </select>
             <button class="chat-option-btn" id="chatImageBtn" title="Generate Image" data-testid="button-generate-image" style="display: none;">🎨 Image</button>
+            <div class="image-quality-toggle" id="imageQualityToggle" style="display: none;">
+              <div class="quality-option" id="qualityStandard" data-quality="standard" data-testid="quality-standard">
+                <div class="quality-radio selected"></div>
+                <div class="quality-info">
+                  <div class="quality-label">Standard</div>
+                  <div class="quality-desc">Fast generation (~3s), good quality</div>
+                </div>
+              </div>
+              <div class="quality-option" id="qualityHigh" data-quality="high" data-testid="quality-high">
+                <div class="quality-radio"></div>
+                <div class="quality-info">
+                  <div class="quality-label">High Quality</div>
+                  <div class="quality-desc">SDXL model (~10s), photorealistic</div>
+                </div>
+              </div>
+            </div>
             <button class="chat-option-btn chat-clear-btn" id="chatClearBtn" title="Clear Messages" data-testid="button-clear-chat">🗑️ Clear</button>
           </div>
           <div class="chat-input-wrapper">

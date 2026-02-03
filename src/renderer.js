@@ -142,6 +142,7 @@ let conversations = [];
 let currentConversationId = null;
 let isGeneratingChat = false;
 let imageMode = false;
+let imageQuality = 'standard'; // 'standard' or 'high' (SDXL)
 let maxPrivacyMode = false;
 let localProcessingMode = false;
 let currentMode = 'chat'; // 'chat' or 'worker'
@@ -1675,7 +1676,7 @@ async function sendChatMessage() {
     
     if (imageMode) {
       // Generate image (always local for now)
-      const result = await window.electronAPI.localImageGenerate(message);
+      const result = await window.electronAPI.localImageGenerate(message, imageQuality);
       removeThinkingIndicator();
       
       if (result.success) {
@@ -1740,11 +1741,40 @@ if (chatInput) {
 }
 
 // Toggle image mode
+const imageQualityToggle = document.getElementById('imageQualityToggle');
+const qualityStandard = document.getElementById('qualityStandard');
+const qualityHigh = document.getElementById('qualityHigh');
+
+function updateQualitySelection(quality) {
+  imageQuality = quality;
+  
+  // Update UI
+  if (qualityStandard && qualityHigh) {
+    qualityStandard.classList.toggle('selected', quality === 'standard');
+    qualityHigh.classList.toggle('selected', quality === 'high');
+    qualityStandard.querySelector('.quality-radio').classList.toggle('selected', quality === 'standard');
+    qualityHigh.querySelector('.quality-radio').classList.toggle('selected', quality === 'high');
+  }
+}
+
+if (qualityStandard) {
+  qualityStandard.addEventListener('click', () => updateQualitySelection('standard'));
+}
+
+if (qualityHigh) {
+  qualityHigh.addEventListener('click', () => updateQualitySelection('high'));
+}
+
 if (chatImageBtn) {
   chatImageBtn.addEventListener('click', () => {
     imageMode = !imageMode;
     chatImageBtn.classList.toggle('active', imageMode);
     chatInput.placeholder = imageMode ? 'Describe the image you want...' : 'Type a message...';
+    
+    // Show/hide quality toggle when image mode is active
+    if (imageQualityToggle) {
+      imageQualityToggle.style.display = imageMode ? 'flex' : 'none';
+    }
   });
 }
 

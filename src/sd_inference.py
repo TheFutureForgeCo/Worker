@@ -101,10 +101,15 @@ def main():
         model_id = input_data.get("model_id", "runwayml/stable-diffusion-v1-5")
         output_path = input_data.get("output_path", "")
         is_benchmark = input_data.get("is_benchmark", False)
+        use_sdxl = input_data.get("use_sdxl", False)
         
-        # Default negative prompt for better quality - avoids common SD 1.5 artifacts
+        # Default negative prompt for better quality - avoids common artifacts
         default_negative = "blurry, low quality, distorted, deformed, ugly, bad anatomy, disfigured, poorly drawn, extra limbs, mutated, grainy, noisy, watermark, text, logo"
         negative_prompt = input_data.get("negative_prompt", default_negative)
+        
+        # Log SDXL mode
+        if use_sdxl:
+            log("Using SDXL model for high quality generation")
         
         # CRITICAL: Round dimensions to multiple of 8 for ONNX compatibility
         # ONNX models require dimensions divisible by 8 to avoid tensor shape mismatches
@@ -167,7 +172,15 @@ def main():
         log("-" * 40)
         
         pipeline_load_start = time.time()
-        from optimum.onnxruntime import ORTStableDiffusionPipeline
+        # Import the appropriate pipeline based on model type
+        if use_sdxl:
+            from optimum.onnxruntime import ORTStableDiffusionXLPipeline as ORTPipeline
+            default_model_id = "stabilityai/stable-diffusion-xl-base-1.0"
+            log("Using SDXL pipeline (ORTStableDiffusionXLPipeline)")
+        else:
+            from optimum.onnxruntime import ORTStableDiffusionPipeline as ORTPipeline
+            default_model_id = "runwayml/stable-diffusion-v1-5"
+            log("Using SD 1.5 pipeline (ORTStableDiffusionPipeline)")
         
         pipe = None
         actual_provider = None
@@ -180,23 +193,23 @@ def main():
             try:
                 if model_dir and os.path.exists(os.path.join(model_dir, "model_index.json")):
                     log(f"Loading from local ONNX model: {model_dir}")
-                    pipe = ORTStableDiffusionPipeline.from_pretrained(
+                    pipe = ORTPipeline.from_pretrained(
                         model_dir,
                         provider=provider_name
                     )
                 else:
                     # Use pre-exported ONNX model
-                    onnx_model_id = "runwayml/stable-diffusion-v1-5"
-                    log(f"Downloading pre-exported ONNX model...")
+                    onnx_model_id = model_id if model_id else default_model_id
+                    log(f"Downloading pre-exported ONNX model: {onnx_model_id}")
                     try:
-                        pipe = ORTStableDiffusionPipeline.from_pretrained(
+                        pipe = ORTPipeline.from_pretrained(
                             onnx_model_id,
                             revision="onnx",
                             provider=provider_name
                         )
                     except Exception as onnx_err:
                         log(f"ONNX revision failed: {onnx_err}")
-                        pipe = ORTStableDiffusionPipeline.from_pretrained(
+                        pipe = ORTPipeline.from_pretrained(
                             onnx_model_id,
                             export=True,
                             provider=provider_name
@@ -283,9 +296,16 @@ def main():
         generator.manual_seed(seed)
         log(f"Random seed set: {seed}")
         
-        num_steps = 20 if is_benchmark else 35
+        # SDXL benefits from fewer steps due to its architecture, SD 1.5 needs more
+        if use_sdxl:
+            num_steps = 20 if is_benchmark else 30  # SDXL is efficient at 30 steps
+            guidance_scale = 7.0  # SDXL works well at 7.0
+        else:
+            num_steps = 20 if is_benchmark else 35  # SD 1.5 benefits from more steps
+            guidance_scale = 7.5  # SD 1.5 classic value
+        
         log(f"Inference steps: {num_steps}")
-        log(f"Guidance scale: 7.5")
+        log(f"Guidance scale: {guidance_scale}")
         log(f"Negative prompt: {negative_prompt[:50]}...")
         
         gen_start = time.time()
@@ -300,7 +320,7 @@ def main():
                 width=width,
                 height=height,
                 num_inference_steps=num_steps,
-                guidance_scale=7.5,
+                guidance_scale=guidance_scale,
                 generator=generator,
             )
         except TypeError as e:
@@ -311,7 +331,7 @@ def main():
                 width=width,
                 height=height,
                 num_inference_steps=num_steps,
-                guidance_scale=7.5,
+                guidance_scale=guidance_scale,
             )
         
         image = result.images[0]
