@@ -3204,10 +3204,11 @@ async function installPythonDeps() {
   
   // Install other packages (without torch since we installed it above)
   // IMPORTANT: numpy must be <2 for onnxruntime-gpu 1.16.3 compatibility
+  // IMPORTANT: diffusers>=0.24.0 required for SDXL ONNX compatibility with optimum
   const basePackages = [
     'numpy<2',  // Pin numpy to <2 for onnxruntime-gpu compatibility
-    'diffusers',
-    'transformers',
+    'diffusers>=0.24.0',  // Required for SDXL ONNX support
+    'transformers>=4.34.0',  // Required for SDXL compatibility
     'accelerate',
     'safetensors',
     'Pillow',
@@ -3309,12 +3310,12 @@ async function installPythonDeps() {
   
   // Step 6: Install optimum with onnxruntime extra (this installs the submodule)
   // Note: This will temporarily install CPU onnxruntime, which we'll override in step 7
-  // IMPORTANT: Require v1.13.0+ for ORTStableDiffusionXLPipeline (SDXL support)
-  log('[Deps] Step 6/8: Installing optimum[onnxruntime]>=1.13.0...');
+  // IMPORTANT: Require v1.16.0+ for proper SDXL ONNX support with diffusers>=0.24.0
+  log('[Deps] Step 6/8: Installing optimum[onnxruntime]>=1.16.0...');
   if (mainWindow) {
     mainWindow.webContents.send('image-ai-deps-progress', 'Installing optimum (AI optimization library)...');
   }
-  await runPipInstall(['optimum[onnxruntime]>=1.13.0']);
+  await runPipInstall(['optimum[onnxruntime]>=1.16.0']);
   
   // Step 7: Reinstall GPU runtime to override the CPU version that optimum installed
   log(`[Deps] Step 7/8: Reinstalling ${onnxRuntimePackage} (override CPU version)...`);
