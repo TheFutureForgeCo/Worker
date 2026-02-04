@@ -562,9 +562,9 @@ function saveConfig() {
 // Create the main window
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 600,
+    width: 750,
     height: 800,
-    minWidth: 500,
+    minWidth: 700,
     minHeight: 650,
     resizable: true,
     frame: false,
@@ -2068,45 +2068,55 @@ async function checkAndRunBenchmarkIfNeeded() {
   }
   
   // ========== SDXL-Turbo Benchmark ==========
-  log('[ImageAI] === SDXL-Turbo Benchmark ===');
-  
-  // Warmup run for SDXL
-  if (mainWindow) {
-    mainWindow.webContents.send('image-ai-deps-progress', 'SDXL-Turbo warmup (3/4)...');
-  }
-  const warmupSDXL = await runBenchmark(true);
-  if (!warmupSDXL.success) {
-    log(`[ImageAI] SDXL-Turbo warmup failed: ${warmupSDXL.error}`);
-  } else {
-    log(`[ImageAI] SDXL-Turbo warmup completed: ${warmupSDXL.time}ms`);
-  }
-  
-  // Actual SDXL benchmark
-  if (mainWindow) {
-    mainWindow.webContents.send('image-ai-deps-progress', 'SDXL-Turbo benchmark (4/4)...');
-  }
-  const benchSDXL = await runBenchmark(true);
-  
-  if (benchSDXL.success) {
-    // Store SDXL benchmark time
-    config.sdxlBenchmarkTimeMs = benchSDXL.time;
-    saveConfig();
-    sendStatusToRenderer();
-    log(`[ImageAI] SDXL-Turbo benchmark completed: ${benchSDXL.time}ms`);
+  // Wrap in try-catch to prevent unhandled exceptions from crashing the entire benchmark flow
+  try {
+    log('[ImageAI] === SDXL-Turbo Benchmark ===');
     
-    // Notify UI of both benchmarks complete
+    // Warmup run for SDXL
     if (mainWindow) {
-      mainWindow.webContents.send('image-ai-dual-benchmark-complete', {
-        sd15Time: config.imageBenchmarkTimeMs,
-        sdxlTime: config.sdxlBenchmarkTimeMs,
-        tier: config.imageQualityTier
-      });
+      mainWindow.webContents.send('image-ai-deps-progress', 'SDXL-Turbo warmup (3/4)...');
     }
-  } else {
-    log(`[ImageAI] SDXL-Turbo benchmark failed: ${benchSDXL.error}`);
-    // SDXL failure is non-fatal - SD 1.5 still works
+    const warmupSDXL = await runBenchmark(true);
+    if (!warmupSDXL.success) {
+      log(`[ImageAI] SDXL-Turbo warmup failed: ${warmupSDXL.error}`);
+    } else {
+      log(`[ImageAI] SDXL-Turbo warmup completed: ${warmupSDXL.time}ms`);
+    }
+    
+    // Actual SDXL benchmark
+    if (mainWindow) {
+      mainWindow.webContents.send('image-ai-deps-progress', 'SDXL-Turbo benchmark (4/4)...');
+    }
+    const benchSDXL = await runBenchmark(true);
+    
+    if (benchSDXL.success) {
+      // Store SDXL benchmark time
+      config.sdxlBenchmarkTimeMs = benchSDXL.time;
+      saveConfig();
+      sendStatusToRenderer();
+      log(`[ImageAI] SDXL-Turbo benchmark completed: ${benchSDXL.time}ms`);
+      
+      // Notify UI of both benchmarks complete
+      if (mainWindow) {
+        mainWindow.webContents.send('image-ai-dual-benchmark-complete', {
+          sd15Time: config.imageBenchmarkTimeMs,
+          sdxlTime: config.sdxlBenchmarkTimeMs,
+          tier: config.imageQualityTier
+        });
+      }
+    } else {
+      log(`[ImageAI] SDXL-Turbo benchmark failed: ${benchSDXL.error}`);
+      // SDXL failure is non-fatal - SD 1.5 still works
+      config.sdxlBenchmarkTimeMs = null;
+      saveConfig();
+    }
+  } catch (sdxlError) {
+    // SDXL benchmark threw an exception - log it but don't crash the overall flow
+    log(`[ImageAI] SDXL-Turbo benchmark exception: ${sdxlError.message}`);
+    log(`[ImageAI] Stack trace: ${sdxlError.stack}`);
     config.sdxlBenchmarkTimeMs = null;
     saveConfig();
+    // SD 1.5 still works, so continue
   }
   
   log(`[ImageAI] Dual benchmark complete: SD1.5=${config.imageBenchmarkTimeMs}ms, SDXL=${config.sdxlBenchmarkTimeMs || 'failed'}ms, tier=${config.imageQualityTier}`);
