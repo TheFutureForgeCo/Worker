@@ -3309,11 +3309,12 @@ async function installPythonDeps() {
   
   // Step 6: Install optimum with onnxruntime extra (this installs the submodule)
   // Note: This will temporarily install CPU onnxruntime, which we'll override in step 7
-  log('[Deps] Step 6/8: Installing optimum[onnxruntime]...');
+  // IMPORTANT: Require v1.13.0+ for ORTStableDiffusionXLPipeline (SDXL support)
+  log('[Deps] Step 6/8: Installing optimum[onnxruntime]>=1.13.0...');
   if (mainWindow) {
     mainWindow.webContents.send('image-ai-deps-progress', 'Installing optimum (AI optimization library)...');
   }
-  await runPipInstall(['optimum[onnxruntime]']);
+  await runPipInstall(['optimum[onnxruntime]>=1.13.0']);
   
   // Step 7: Reinstall GPU runtime to override the CPU version that optimum installed
   log(`[Deps] Step 7/8: Reinstalling ${onnxRuntimePackage} (override CPU version)...`);
@@ -3339,9 +3340,10 @@ async function installPythonDeps() {
 import sys
 try:
     from optimum.onnxruntime import ORTStableDiffusionPipeline
+    from optimum.onnxruntime import ORTStableDiffusionXLPipeline
     import onnxruntime as ort
     providers = ort.get_available_providers()
-    print(f"OK: providers={providers}")
+    print(f"OK: SD1.5+SDXL pipelines available, providers={providers}")
 except ImportError as e:
     print(f"MISSING: {e}")
 `;

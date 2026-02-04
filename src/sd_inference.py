@@ -174,7 +174,17 @@ def main():
         pipeline_load_start = time.time()
         # Import the appropriate pipeline based on model type
         if use_sdxl:
-            from optimum.onnxruntime import ORTStableDiffusionXLPipeline as ORTPipeline
+            try:
+                from optimum.onnxruntime import ORTStableDiffusionXLPipeline as ORTPipeline
+            except ImportError as e:
+                log(f"ERROR: ORTStableDiffusionXLPipeline not available!")
+                log(f"Import error: {e}")
+                log("This requires optimum>=1.13.0. Please delete image-ai folder and re-download.")
+                raise ImportError(
+                    "SDXL pipeline requires optimum>=1.13.0. Please delete the image-ai folder "
+                    "in your AppData/Roaming/computegrid-worker directory and restart the app "
+                    "to re-download dependencies with SDXL support."
+                )
             # Use SDXL-Turbo which is pre-exported ONNX (faster and works with DirectML)
             default_model_id = "onnxruntime/sdxl-turbo"
             log("Using SDXL-Turbo pipeline (ORTStableDiffusionXLPipeline)")
