@@ -185,9 +185,11 @@ def main():
                     "in your AppData/Roaming/computegrid-worker directory and restart the app "
                     "to re-download dependencies with SDXL support."
                 )
-            # Use SDXL-Turbo which is pre-exported ONNX (faster and works with DirectML)
-            default_model_id = "onnxruntime/sdxl-turbo"
-            log("Using SDXL-Turbo pipeline (ORTStableDiffusionXLPipeline)")
+            # Use stabilityai/sdxl-turbo and export to ONNX
+            # Note: onnxruntime/sdxl-turbo is NOT compatible with optimum's ORTStableDiffusionXLPipeline
+            # We must use the original model and export with export=True
+            default_model_id = "stabilityai/sdxl-turbo"
+            log("Using SDXL-Turbo pipeline (ORTStableDiffusionXLPipeline with export=True)")
         else:
             from optimum.onnxruntime import ORTStableDiffusionPipeline as ORTPipeline
             default_model_id = "runwayml/stable-diffusion-v1-5"
@@ -209,24 +211,23 @@ def main():
                         provider=provider_name
                     )
                 else:
-                    # Use pre-exported ONNX model
+                    # Download and convert model to ONNX
                     onnx_model_id = model_id if model_id else default_model_id
-                    log(f"Downloading pre-exported ONNX model: {onnx_model_id}")
+                    log(f"Downloading model: {onnx_model_id}")
                     
-                    # SDXL models from onnxruntime/ are already ONNX format, no revision needed
-                    # SD 1.5 from runwayml/ needs revision="onnx" to get ONNX variant
-                    is_onnx_native = onnx_model_id.startswith("onnxruntime/")
-                    
-                    if is_onnx_native:
-                        # onnxruntime/sdxl-turbo is already in ONNX format
-                        log(f"Loading native ONNX model (no revision needed)")
+                    if use_sdxl:
+                        # SDXL: Must use export=True because onnxruntime/sdxl-turbo is incompatible
+                        # with optimum's ORTStableDiffusionXLPipeline. Export from stabilityai/sdxl-turbo.
+                        log(f"Exporting SDXL model to ONNX format (this may take a few minutes first time)...")
                         pipe = ORTPipeline.from_pretrained(
                             onnx_model_id,
+                            export=True,
                             provider=provider_name
                         )
                     else:
-                        # For other models, try onnx revision first, then export
+                        # SD 1.5: Try onnx revision first (faster), then export as fallback
                         try:
+                            log(f"Loading pre-exported ONNX model...")
                             pipe = ORTPipeline.from_pretrained(
                                 onnx_model_id,
                                 revision="onnx",
@@ -234,6 +235,7 @@ def main():
                             )
                         except Exception as onnx_err:
                             log(f"ONNX revision failed: {onnx_err}")
+                            log(f"Exporting model to ONNX format...")
                             pipe = ORTPipeline.from_pretrained(
                                 onnx_model_id,
                                 export=True,
