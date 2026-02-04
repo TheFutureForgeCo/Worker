@@ -1899,9 +1899,9 @@ const PYTHON_EXE = process.platform === 'win32'
 
 // ONNX model IDs from Hugging Face - will be downloaded automatically by diffusers
 const SD_ONNX_MODEL_ID = 'runwayml/stable-diffusion-v1-5';
-// Use SDXL-Turbo ONNX which is pre-exported and faster (1-4 steps vs 30)
-// This is the official onnxruntime pre-exported SDXL model
-const SDXL_ONNX_MODEL_ID = 'onnxruntime/sdxl-turbo';
+// Use SDXL-Turbo from stabilityai and export to ONNX with optimum
+// Note: onnxruntime/sdxl-turbo is NOT compatible with optimum's ORTStableDiffusionXLPipeline
+const SDXL_ONNX_MODEL_ID = 'stabilityai/sdxl-turbo';
 // The model is downloaded on first use, so we check for the model_index.json file
 const SD_MODEL_INDEX_PATH = path.join(SD_MODEL_DIR, 'model_index.json');
 const SDXL_MODEL_INDEX_PATH = path.join(SDXL_MODEL_DIR, 'model_index.json');

@@ -949,8 +949,8 @@ async function callEmbeddedSdGenerate(prompt, width, height, seed, tileX, tileY,
     const fullPrompt = prompt + regionHint;
     
     // Use appropriate model based on quality setting
-    // SDXL-Turbo is pre-exported ONNX and works with DirectML (faster: 1-4 steps vs 30)
-    const modelId = useSDXL ? 'onnxruntime/sdxl-turbo' : 'runwayml/stable-diffusion-v1-5';
+    // SDXL-Turbo must use stabilityai/sdxl-turbo (onnxruntime/sdxl-turbo is incompatible with optimum)
+    const modelId = useSDXL ? 'stabilityai/sdxl-turbo' : 'runwayml/stable-diffusion-v1-5';
     const modelDir = useSDXL ? SDXL_ONNX_MODEL_DIR : SD_ONNX_MODEL_DIR;
     
     const inputData = JSON.stringify({
