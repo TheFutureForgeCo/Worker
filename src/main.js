@@ -3971,12 +3971,20 @@ async function generateImage(params) {
     
     log(`[Generate] Running: ${PYTHON_EXE} ${scriptPath}`);
     
+    // SDXL needs much longer timeout for first-time ONNX export (can take 15+ minutes)
+    // SD 1.5 also needs extra time for first-time download
+    const timeoutMs = use_sdxl 
+      ? 25 * 60 * 1000  // 25 minutes for SDXL (first-time ONNX export takes 10-20 mins)
+      : 10 * 60 * 1000; // 10 minutes for SD 1.5 (first-time download + warmup)
+    
+    log(`[Generate] Using timeout: ${timeoutMs / 60000} minutes (use_sdxl=${use_sdxl || false})`);
+    
     const proc = spawn(PYTHON_EXE, [scriptPath, inputData], {
       env: {
         ...process.env,
         PYTHONUNBUFFERED: '1'
       },
-      timeout: 5 * 60 * 1000 // 5 minute timeout
+      timeout: timeoutMs
     });
     
     let stdout = '';
