@@ -4120,6 +4120,142 @@ ipcMain.handle('generate-image', async (event, params) => {
   return await generateImage(params);
 });
 
+// Image Assistant - conversational AI that configures image generation settings
+ipcMain.handle('image-assistant-chat', async (event, message, conversationHistory = [], currentSettings = {}) => {
+  log(`[ImageAssistant] User: ${message.substring(0, 80)}...`);
+  
+  try {
+    const systemPrompt = `You are an expert image generation assistant. The user wants to create an image using Stable Diffusion. Your job is to understand what they want and configure the optimal settings.
+
+Available settings you can configure:
+- prompt: The detailed image generation prompt (be descriptive with style, lighting, composition, colors, medium)
+- negative_prompt: Things to avoid in the image (common: blurry, low quality, distorted, deformed, ugly, bad anatomy, watermark, text)
+- steps: Number of inference steps (5-50, more = better quality but slower. Default 35)
+- guidance_scale: How closely to follow the prompt (0-20, default 7.5. Higher = more literal)
+- aspect_ratio: One of "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"
+- seed: A specific number for reproducible results (omit for random)
+- quality: "standard" (SD 1.5, fast) or "high" (SDXL-Turbo, photorealistic)
+
+IMPORTANT RULES:
+1. If the user's request is clear enough, respond with a JSON block containing all recommended settings.
+2. If the request is vague or you need more details, ask a SHORT clarifying question (1-2 sentences max).
+3. When providing settings, ALWAYS include a friendly 1-sentence summary of what you configured.
+4. Format your response as: your message text, then on a new line the JSON block wrapped in \`\`\`json ... \`\`\`
+5. The prompt should be detailed and descriptive - expand brief descriptions into rich prompts.
+6. Always include a good negative_prompt that matches the content type.
+7. If the user asks to change just one thing, only update that setting and keep others as they are.
+
+Current settings the user already has configured:
+${JSON.stringify(currentSettings, null, 2)}
+
+Example response when you have enough info:
+I'll set up a cinematic landscape shot for you with warm sunset lighting.
+\`\`\`json
+{"prompt": "majestic medieval castle perched on dramatic sea cliffs, golden hour sunset, volumetric god rays, dramatic clouds, cinematic composition, wide angle, hyper detailed, professional photography", "negative_prompt": "blurry, low quality, distorted, cartoon, anime, painting, watermark, text", "steps": 35, "guidance_scale": 8, "aspect_ratio": "16:9", "quality": "standard"}
+\`\`\`
+
+Example response when you need more info:
+What art style are you going for - photorealistic, oil painting, digital art, or something else?`;
+
+    const messages = [{ role: 'system', content: systemPrompt }];
+    for (const msg of conversationHistory) {
+      messages.push({ role: msg.role, content: msg.content });
+    }
+    messages.push({ role: 'user', content: message });
+    
+    const response = await fetch(`${OLLAMA_HOST}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'mistral:7b',
+        messages: messages,
+        stream: false,
+        options: { temperature: 0.7, num_ctx: 4096 }
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Ollama error: ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    const content = data.message?.content || '';
+    log(`[ImageAssistant] Response: ${content.substring(0, 100)}...`);
+    
+    // Parse JSON settings from the response if present
+    let settings = null;
+    const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/);
+    if (jsonMatch) {
+      try {
+        settings = JSON.parse(jsonMatch[1]);
+        log(`[ImageAssistant] Parsed settings: ${JSON.stringify(settings)}`);
+      } catch (e) {
+        log(`[ImageAssistant] Failed to parse JSON from response: ${e.message}`);
+      }
+    }
+    
+    // Extract the message text (everything before the JSON block)
+    let displayMessage = content;
+    if (jsonMatch) {
+      displayMessage = content.substring(0, content.indexOf('```json')).trim();
+    }
+    if (!displayMessage) {
+      displayMessage = settings ? 'Settings configured!' : content;
+    }
+    
+    return { success: true, message: displayMessage, settings: settings };
+  } catch (err) {
+    log(`[ImageAssistant] Error: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+});
+
+// Enhance a single field using LLM
+ipcMain.handle('enhance-field', async (event, fieldName, currentValue, context = {}) => {
+  log(`[EnhanceField] Enhancing ${fieldName}: ${(currentValue || '').substring(0, 50)}...`);
+  
+  try {
+    let systemPrompt = '';
+    
+    if (fieldName === 'prompt') {
+      systemPrompt = `You are an expert Stable Diffusion prompt engineer. Take the user's image description and expand it into a detailed, high-quality prompt. Include specifics about: artistic style, lighting, composition, colors, medium, quality descriptors, and camera details where appropriate. Output ONLY the enhanced prompt text, nothing else. No explanations, no quotes, just the prompt.`;
+    } else if (fieldName === 'negative_prompt') {
+      systemPrompt = `You are an expert at writing negative prompts for Stable Diffusion image generation. Given the context of what the user wants to create, write an optimal negative prompt that will prevent common artifacts and unwanted elements. Output ONLY the negative prompt text (comma-separated terms), nothing else. No explanations, no quotes.
+      
+The main image prompt is: ${context.prompt || 'general image'}`;
+    }
+    
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: currentValue || (fieldName === 'negative_prompt' ? 'Generate a good negative prompt for this image' : 'A beautiful scene') }
+    ];
+    
+    const response = await fetch(`${OLLAMA_HOST}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'mistral:7b',
+        messages: messages,
+        stream: false,
+        options: { temperature: 0.8, num_ctx: 2048 }
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Ollama error: ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    const enhanced = (data.message?.content || '').trim();
+    log(`[EnhanceField] Enhanced: ${enhanced.substring(0, 100)}...`);
+    
+    return { success: true, enhanced: enhanced };
+  } catch (err) {
+    log(`[EnhanceField] Error: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle('save-image-to-downloads', async (event, imagePath) => {
   try {
     if (!imagePath || typeof imagePath !== 'string') {

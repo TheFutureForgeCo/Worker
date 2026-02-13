@@ -2117,13 +2117,22 @@ if (chatImageBtn) {
       imageQualityToggle.style.display = imageMode ? 'flex' : 'none';
     }
     
-    // Show/hide advanced toggle and temperature control
+    // Show/hide advanced toggle, assistant button, enhance button, and temperature control
     const advToggle = document.getElementById('imageAdvancedToggle');
     const advPanel = document.getElementById('imageAdvancedPanel');
     const tempControl = document.getElementById('chatTemperatureControl');
+    const assistBtn = document.getElementById('imageAssistantBtn');
+    const assistPanel = document.getElementById('imageAssistantPanel');
+    const enhPromptBtn = document.getElementById('enhancePromptBtn');
     if (advToggle) advToggle.style.display = imageMode ? 'flex' : 'none';
-    if (!imageMode && advPanel) advPanel.classList.remove('visible');
-    if (!imageMode && advToggle) advToggle.classList.remove('active');
+    if (assistBtn) assistBtn.style.display = imageMode ? 'flex' : 'none';
+    if (enhPromptBtn) enhPromptBtn.style.display = imageMode ? 'flex' : 'none';
+    if (!imageMode) {
+      if (advPanel) advPanel.classList.remove('visible');
+      if (advToggle) advToggle.classList.remove('active');
+      if (assistPanel) assistPanel.classList.remove('visible');
+      if (assistBtn) assistBtn.classList.remove('active');
+    }
     if (tempControl) tempControl.style.display = imageMode ? 'none' : (localProcessingMode ? 'flex' : 'none');
   });
 }
@@ -2177,6 +2186,263 @@ function updateImageControlDefaults(quality) {
     if (imgStepsSlider) { imgStepsSlider.value = 35; imgStepsSlider.max = 50; imgStepsSlider.min = 5; if (imgStepsValue) imgStepsValue.textContent = '35'; }
     if (imgGuidanceSlider) { imgGuidanceSlider.value = 7.5; imgGuidanceSlider.disabled = false; if (imgGuidanceValue) imgGuidanceValue.textContent = '7.5'; }
   }
+}
+
+// ============ IMAGE ASSISTANT ============
+
+let imageAssistantHistory = [];
+let isAssistantThinking = false;
+
+// Image Assistant toggle button
+const imageAssistantBtn = document.getElementById('imageAssistantBtn');
+const imageAssistantPanel = document.getElementById('imageAssistantPanel');
+const imageAssistantClose = document.getElementById('imageAssistantClose');
+const imageAssistantInput = document.getElementById('imageAssistantInput');
+const imageAssistantSend = document.getElementById('imageAssistantSend');
+const imageAssistantMessages = document.getElementById('imageAssistantMessages');
+
+function toggleImageAssistant(show) {
+  if (imageAssistantPanel) {
+    imageAssistantPanel.classList.toggle('visible', show);
+  }
+  if (imageAssistantBtn) {
+    imageAssistantBtn.classList.toggle('active', show);
+  }
+  if (show && imageAssistantInput) {
+    imageAssistantInput.focus();
+  }
+}
+
+if (imageAssistantBtn) {
+  imageAssistantBtn.addEventListener('click', () => {
+    const isVisible = imageAssistantPanel?.classList.contains('visible');
+    toggleImageAssistant(!isVisible);
+  });
+}
+
+if (imageAssistantClose) {
+  imageAssistantClose.addEventListener('click', () => {
+    toggleImageAssistant(false);
+  });
+}
+
+function addAssistantMessage(role, text) {
+  if (!imageAssistantMessages) return;
+  const div = document.createElement('div');
+  div.className = `ia-msg ${role}`;
+  div.textContent = text;
+  imageAssistantMessages.appendChild(div);
+  imageAssistantMessages.scrollTop = imageAssistantMessages.scrollHeight;
+}
+
+function showAssistantThinking() {
+  if (!imageAssistantMessages) return;
+  const div = document.createElement('div');
+  div.className = 'ia-thinking';
+  div.id = 'iaThinking';
+  div.innerHTML = '<span></span><span></span><span></span>';
+  imageAssistantMessages.appendChild(div);
+  imageAssistantMessages.scrollTop = imageAssistantMessages.scrollHeight;
+}
+
+function removeAssistantThinking() {
+  const el = document.getElementById('iaThinking');
+  if (el) el.remove();
+}
+
+function getCurrentImageSettings() {
+  return {
+    prompt: chatInput?.value || '',
+    negative_prompt: document.getElementById('imgNegativePrompt')?.value || '',
+    steps: parseInt(document.getElementById('imgSteps')?.value || '35'),
+    guidance_scale: parseFloat(document.getElementById('imgGuidance')?.value || '7.5'),
+    aspect_ratio: document.getElementById('imgAspectRatio')?.value || '1:1',
+    seed: document.getElementById('imgSeed')?.value || '',
+    quality: imageQuality
+  };
+}
+
+function applyImageSettings(settings) {
+  if (!settings) return;
+  
+  // Apply quality FIRST so that steps/guidance limits are correct
+  if (settings.quality && (settings.quality === 'standard' || settings.quality === 'high')) {
+    updateQualitySelection(settings.quality);
+  }
+  
+  // Apply prompt
+  if (settings.prompt && chatInput) {
+    chatInput.value = settings.prompt;
+    chatInput.style.height = 'auto';
+    chatInput.style.height = chatInput.scrollHeight + 'px';
+  }
+  
+  // Apply negative prompt
+  if (settings.negative_prompt) {
+    const negEl = document.getElementById('imgNegativePrompt');
+    if (negEl) negEl.value = settings.negative_prompt;
+  }
+  
+  // Apply steps - use the currently active quality (may have just changed above)
+  if (settings.steps) {
+    const stepsEl = document.getElementById('imgSteps');
+    const stepsValEl = document.getElementById('imgStepsValue');
+    if (stepsEl) {
+      const isHigh = imageQuality === 'high';
+      const minSteps = isHigh ? 1 : 5;
+      const maxSteps = isHigh ? 4 : 50;
+      const val = Math.min(Math.max(parseInt(settings.steps), minSteps), maxSteps);
+      stepsEl.value = val;
+      if (stepsValEl) stepsValEl.textContent = val;
+    }
+  }
+  
+  // Apply guidance (SDXL-Turbo must stay at 0)
+  if (settings.guidance_scale != null) {
+    const guidanceEl = document.getElementById('imgGuidance');
+    const guidanceValEl = document.getElementById('imgGuidanceValue');
+    if (guidanceEl && !guidanceEl.disabled) {
+      guidanceEl.value = settings.guidance_scale;
+      if (guidanceValEl) guidanceValEl.textContent = parseFloat(settings.guidance_scale).toFixed(1);
+    }
+  }
+  
+  // Apply aspect ratio
+  if (settings.aspect_ratio) {
+    const aspectEl = document.getElementById('imgAspectRatio');
+    if (aspectEl) {
+      const validRatios = ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3'];
+      if (validRatios.includes(settings.aspect_ratio)) {
+        aspectEl.value = settings.aspect_ratio;
+      }
+    }
+  }
+  
+  // Apply seed
+  if (settings.seed != null) {
+    const seedEl = document.getElementById('imgSeed');
+    if (seedEl) seedEl.value = settings.seed;
+  }
+  
+  // Open advanced panel so user can see the configured settings
+  const advPanel = document.getElementById('imageAdvancedPanel');
+  const advToggle = document.getElementById('imageAdvancedToggle');
+  if (advPanel && !advPanel.classList.contains('visible')) {
+    advPanel.classList.add('visible');
+    if (advToggle) advToggle.classList.add('active');
+  }
+  
+  // Show a system message confirming settings were applied
+  addAssistantMessage('system', 'Settings applied! Review them below and hit Send to generate.');
+}
+
+async function sendAssistantMessage() {
+  const msg = imageAssistantInput?.value?.trim();
+  if (!msg || isAssistantThinking) return;
+  
+  isAssistantThinking = true;
+  if (imageAssistantSend) imageAssistantSend.disabled = true;
+  
+  // Add user message
+  addAssistantMessage('user', msg);
+  imageAssistantHistory.push({ role: 'user', content: msg });
+  imageAssistantInput.value = '';
+  
+  // Show thinking
+  showAssistantThinking();
+  
+  try {
+    const currentSettings = getCurrentImageSettings();
+    const result = await window.electronAPI.imageAssistantChat(msg, imageAssistantHistory, currentSettings);
+    
+    removeAssistantThinking();
+    
+    if (result.success) {
+      addAssistantMessage('assistant', result.message);
+      imageAssistantHistory.push({ role: 'assistant', content: result.message });
+      
+      if (result.settings) {
+        applyImageSettings(result.settings);
+      }
+    } else {
+      addAssistantMessage('assistant', `Sorry, I couldn't process that: ${result.error}`);
+    }
+  } catch (err) {
+    removeAssistantThinking();
+    addAssistantMessage('assistant', 'Something went wrong. Make sure Ollama is running.');
+  }
+  
+  isAssistantThinking = false;
+  if (imageAssistantSend) imageAssistantSend.disabled = false;
+  if (imageAssistantInput) imageAssistantInput.focus();
+}
+
+if (imageAssistantSend) {
+  imageAssistantSend.addEventListener('click', sendAssistantMessage);
+}
+
+if (imageAssistantInput) {
+  imageAssistantInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      sendAssistantMessage();
+    }
+  });
+}
+
+// ============ PER-FIELD ENHANCE BUTTONS ============
+
+const enhancePromptBtn = document.getElementById('enhancePromptBtn');
+const enhanceNegPromptBtn = document.getElementById('enhanceNegPromptBtn');
+
+async function enhanceField(fieldName, inputEl, btn) {
+  if (!inputEl || !btn) return;
+  
+  const currentValue = inputEl.value?.trim();
+  if (!currentValue && fieldName === 'prompt') {
+    showToast('Type something in the prompt first', 'warning');
+    return;
+  }
+  
+  btn.disabled = true;
+  btn.classList.add('enhancing');
+  const originalText = btn.innerHTML;
+  btn.innerHTML = '<svg class="sparkle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.4 7.4H22l-6.2 4.5L18.2 22 12 17.5 5.8 22l2.4-8.1L2 9.4h7.6z"/></svg> Working...';
+  
+  try {
+    const context = { prompt: chatInput?.value || '' };
+    const result = await window.electronAPI.enhanceField(fieldName, currentValue, context);
+    
+    if (result.success && result.enhanced) {
+      inputEl.value = result.enhanced;
+      if (inputEl.tagName === 'TEXTAREA') {
+        inputEl.style.height = 'auto';
+        inputEl.style.height = inputEl.scrollHeight + 'px';
+      }
+      showToast('Field enhanced!', 'success');
+    } else {
+      showToast(result.error || 'Enhancement failed', 'error');
+    }
+  } catch (err) {
+    showToast('Make sure Ollama is running', 'error');
+  }
+  
+  btn.disabled = false;
+  btn.classList.remove('enhancing');
+  btn.innerHTML = originalText;
+}
+
+if (enhancePromptBtn) {
+  enhancePromptBtn.addEventListener('click', () => {
+    enhanceField('prompt', chatInput, enhancePromptBtn);
+  });
+}
+
+if (enhanceNegPromptBtn) {
+  enhanceNegPromptBtn.addEventListener('click', () => {
+    const negEl = document.getElementById('imgNegativePrompt');
+    enhanceField('negative_prompt', negEl, enhanceNegPromptBtn);
+  });
 }
 
 // Listen for streaming chat tokens

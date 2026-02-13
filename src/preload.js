@@ -64,6 +64,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   localChatSend: (message, model, conversationHistory) => ipcRenderer.invoke('local-chat-send', message, model, conversationHistory),
   localChatStream: (message, model, conversationHistory, options) => ipcRenderer.invoke('local-chat-stream', message, model, conversationHistory, options),
   localImageGenerate: (prompt, quality, imageOptions) => ipcRenderer.invoke('local-image-generate', prompt, quality, imageOptions),
+  imageAssistantChat: (message, conversationHistory, currentSettings) => ipcRenderer.invoke('image-assistant-chat', message, conversationHistory, currentSettings),
+  enhanceField: (fieldName, currentValue, context) => ipcRenderer.invoke('enhance-field', fieldName, currentValue, context),
   
   // Server chat (ComputeGrid network API)
   serverChatSend: (message, conversationHistory) => ipcRenderer.invoke('server-chat-send', message, conversationHistory),
