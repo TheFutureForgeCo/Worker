@@ -1825,6 +1825,171 @@
       color: var(--text-muted);
     }
 
+    /* Chat temperature slider */
+    .chat-temperature-control {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 0;
+    }
+    .chat-temperature-control label {
+      font-size: 12px;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    .chat-temperature-control input[type="range"] {
+      width: 80px;
+      height: 4px;
+      -webkit-appearance: none;
+      appearance: none;
+      background: var(--border-color);
+      border-radius: 2px;
+      outline: none;
+    }
+    .chat-temperature-control input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--primary);
+      cursor: pointer;
+    }
+    .chat-temperature-control .temp-value {
+      font-size: 12px;
+      color: var(--text-primary);
+      min-width: 24px;
+      text-align: center;
+      font-weight: 500;
+    }
+
+    /* Image advanced controls */
+    .image-advanced-toggle {
+      display: none;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 8px;
+      background: none;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      color: var(--text-muted);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all var(--transition);
+    }
+    .image-advanced-toggle:hover {
+      color: var(--primary);
+      border-color: var(--primary);
+    }
+    .image-advanced-toggle.active {
+      color: var(--primary);
+      border-color: var(--primary);
+    }
+    .image-advanced-toggle svg {
+      transition: transform 0.2s;
+    }
+    .image-advanced-toggle.active svg {
+      transform: rotate(180deg);
+    }
+
+    .image-advanced-panel {
+      display: none;
+      flex-direction: column;
+      gap: 10px;
+      padding: 12px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      margin-top: 4px;
+    }
+    .image-advanced-panel.visible {
+      display: flex;
+    }
+
+    .img-control-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .img-control-row label {
+      font-size: 12px;
+      color: var(--text-muted);
+      min-width: 80px;
+      white-space: nowrap;
+    }
+    .img-control-row input[type="range"] {
+      flex: 1;
+      height: 4px;
+      -webkit-appearance: none;
+      appearance: none;
+      background: var(--border-color);
+      border-radius: 2px;
+      outline: none;
+    }
+    .img-control-row input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--primary);
+      cursor: pointer;
+    }
+    .img-control-row .control-value {
+      font-size: 12px;
+      color: var(--text-primary);
+      min-width: 28px;
+      text-align: center;
+      font-weight: 500;
+    }
+    .img-control-row input[type="text"],
+    .img-control-row input[type="number"] {
+      flex: 1;
+      padding: 4px 8px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      color: var(--text-primary);
+      font-size: 12px;
+      outline: none;
+    }
+    .img-control-row input[type="text"]:focus,
+    .img-control-row input[type="number"]:focus {
+      border-color: var(--primary);
+    }
+    .img-control-row select {
+      flex: 1;
+      padding: 4px 8px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      color: var(--text-primary);
+      font-size: 12px;
+      outline: none;
+    }
+    .img-control-row select:focus {
+      border-color: var(--primary);
+    }
+
+    .img-negative-prompt {
+      width: 100%;
+      padding: 6px 8px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      color: var(--text-primary);
+      font-size: 12px;
+      outline: none;
+      resize: vertical;
+      min-height: 36px;
+      max-height: 80px;
+      font-family: inherit;
+    }
+    .img-negative-prompt:focus {
+      border-color: var(--primary);
+    }
+    .img-negative-prompt::placeholder {
+      color: var(--text-muted);
+    }
+
     /* Maximum Privacy indicator in main page */
     .privacy-mode-banner {
       display: none;
@@ -1998,7 +2163,15 @@
               <option value="mistral">Mistral 7B</option>
               <option value="tinyllama">TinyLlama</option>
             </select>
-            <button class="chat-option-btn" id="chatImageBtn" title="Generate Image" data-testid="button-generate-image" style="display: none;">🎨 Image</button>
+            <div class="chat-temperature-control" id="chatTemperatureControl">
+              <label title="Lower = more focused and deterministic. Higher = more creative and random.">Creativity</label>
+              <input type="range" id="chatTemperature" min="0" max="1.5" step="0.1" value="0.7" data-testid="slider-temperature">
+              <span class="temp-value" id="chatTempValue">0.7</span>
+            </div>
+            <button class="chat-option-btn" id="chatImageBtn" title="Generate Image" data-testid="button-generate-image" style="display: none;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+              Image
+            </button>
             <div class="image-quality-toggle" id="imageQualityToggle" style="display: none;">
               <div class="quality-option" id="qualityStandard" data-quality="standard" data-testid="quality-standard">
                 <div class="quality-radio selected"></div>
@@ -2015,7 +2188,46 @@
                 </div>
               </div>
             </div>
-            <button class="chat-option-btn chat-clear-btn" id="chatClearBtn" title="Clear Messages" data-testid="button-clear-chat">🗑️ Clear</button>
+            <button class="image-advanced-toggle" id="imageAdvancedToggle" data-testid="button-advanced-image">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+              Advanced
+            </button>
+            <button class="chat-option-btn chat-clear-btn" id="chatClearBtn" title="Clear Messages" data-testid="button-clear-chat">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+              Clear
+            </button>
+          </div>
+          <div class="image-advanced-panel" id="imageAdvancedPanel">
+            <div class="img-control-row">
+              <label>Negative Prompt</label>
+            </div>
+            <textarea class="img-negative-prompt" id="imgNegativePrompt" placeholder="Things to avoid: blurry, distorted, low quality..." rows="2" data-testid="input-negative-prompt"></textarea>
+            <div class="img-control-row">
+              <label>Steps</label>
+              <input type="range" id="imgSteps" min="5" max="50" step="1" value="35" data-testid="slider-steps">
+              <span class="control-value" id="imgStepsValue">35</span>
+            </div>
+            <div class="img-control-row">
+              <label>Guidance</label>
+              <input type="range" id="imgGuidance" min="0" max="20" step="0.5" value="7.5" data-testid="slider-guidance">
+              <span class="control-value" id="imgGuidanceValue">7.5</span>
+            </div>
+            <div class="img-control-row">
+              <label>Aspect Ratio</label>
+              <select id="imgAspectRatio" data-testid="select-aspect-ratio">
+                <option value="1:1">1:1 (Square)</option>
+                <option value="16:9">16:9 (Landscape)</option>
+                <option value="9:16">9:16 (Portrait)</option>
+                <option value="4:3">4:3 (Standard)</option>
+                <option value="3:4">3:4 (Portrait)</option>
+                <option value="3:2">3:2 (Wide)</option>
+                <option value="2:3">2:3 (Tall)</option>
+              </select>
+            </div>
+            <div class="img-control-row">
+              <label>Seed</label>
+              <input type="number" id="imgSeed" placeholder="Random" min="0" max="2147483647" data-testid="input-seed">
+            </div>
           </div>
           <div class="chat-input-wrapper">
             <textarea class="chat-input" id="chatInput" placeholder="Type a message..." rows="1" data-testid="input-chat-message"></textarea>

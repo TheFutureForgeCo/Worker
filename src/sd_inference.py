@@ -326,13 +326,15 @@ def main():
         # SDXL-Turbo uses very few steps (1-4) with no guidance needed
         # Regular SDXL would use 30 steps with guidance 7.0
         # SD 1.5 uses 35 steps with guidance 7.5
+        user_steps = input_data.get("num_steps", None)
+        user_guidance = input_data.get("guidance_scale", None)
+        
         if use_sdxl:
-            # SDXL-Turbo (onnxruntime/sdxl-turbo) - optimized for fast inference
-            num_steps = 2 if is_benchmark else 4  # SDXL-Turbo needs only 1-4 steps
-            guidance_scale = 0.0  # SDXL-Turbo works without guidance (distilled model)
+            num_steps = 2 if is_benchmark else (min(max(user_steps, 1), 4) if user_steps else 4)
+            guidance_scale = 0.0  # SDXL-Turbo requires guidance_scale=0.0 always
         else:
-            num_steps = 20 if is_benchmark else 35  # SD 1.5 benefits from more steps
-            guidance_scale = 7.5  # SD 1.5 classic value
+            num_steps = 20 if is_benchmark else (min(max(user_steps, 5), 50) if user_steps else 35)
+            guidance_scale = user_guidance if user_guidance is not None else 7.5
         
         log(f"Inference steps: {num_steps}")
         log(f"Guidance scale: {guidance_scale}")

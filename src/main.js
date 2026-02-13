@@ -2354,7 +2354,7 @@ ipcMain.handle('local-chat-send', async (event, message, model, conversationHist
 });
 
 // Local chat stream - streaming Ollama communication
-ipcMain.handle('local-chat-stream', async (event, message, model, conversationHistory) => {
+ipcMain.handle('local-chat-stream', async (event, message, model, conversationHistory, options = {}) => {
   log(`[LocalChat] Starting stream to ${model}: ${message.substring(0, 50)}...`);
   
   try {
@@ -2364,11 +2364,20 @@ ipcMain.handle('local-chat-stream', async (event, message, model, conversationHi
     };
     const ollamaModel = modelMap[model] || 'mistral:7b';
     
-    const messages = conversationHistory.map(msg => ({
-      role: msg.role,
-      content: msg.content
-    }));
+    const temperature = options.temperature ?? 0.7;
+    const systemPrompt = options.systemPrompt || 'You are a helpful, knowledgeable AI assistant. Respond naturally and conversationally. Be thorough but concise. Use markdown formatting when it helps readability (headings, lists, code blocks, bold/italic). If you are unsure about something, say so honestly rather than making things up.';
+    
+    const messages = [];
+    messages.push({ role: 'system', content: systemPrompt });
+    
+    for (const msg of conversationHistory) {
+      if (msg.role === 'user' || msg.role === 'assistant') {
+        messages.push({ role: msg.role, content: msg.content });
+      }
+    }
     messages.push({ role: 'user', content: message });
+    
+    log(`[LocalChat] Sending ${messages.length} messages (temp=${temperature})`);
     
     const response = await fetch(`${OLLAMA_HOST}/api/chat`, {
       method: 'POST',
@@ -2376,7 +2385,11 @@ ipcMain.handle('local-chat-stream', async (event, message, model, conversationHi
       body: JSON.stringify({
         model: ollamaModel,
         messages: messages,
-        stream: true
+        stream: true,
+        options: {
+          temperature: temperature,
+          num_ctx: 4096
+        }
       })
     });
     
@@ -2425,7 +2438,7 @@ ipcMain.handle('local-chat-stream', async (event, message, model, conversationHi
 });
 
 // Local image generation - direct ONNX Runtime (no server)
-ipcMain.handle('local-image-generate', async (event, prompt, quality = 'standard') => {
+ipcMain.handle('local-image-generate', async (event, prompt, quality = 'standard', imageOptions = {}) => {
   log(`[LocalImage] Generating image for prompt: ${prompt.substring(0, 50)}... (quality: ${quality})`);
   
   try {
@@ -2452,16 +2465,42 @@ ipcMain.handle('local-image-generate', async (event, prompt, quality = 'standard
     const modelPath = useSDXL ? SDXL_MODEL_DIR : (aiPaths.sdModelPath || SD_MODEL_DIR);
     const modelId = useSDXL ? SDXL_ONNX_MODEL_ID : SD_ONNX_MODEL_ID;
     
-    // SDXL uses 1024x1024 base resolution, SD 1.5 uses 512x512
-    const imageSize = useSDXL ? 1024 : 512;
+    // Parse image dimensions from aspect ratio or use defaults
+    const baseSize = useSDXL ? 1024 : 512;
+    let imgWidth = baseSize;
+    let imgHeight = baseSize;
+    
+    if (imageOptions.aspectRatio) {
+      const ratios = {
+        '1:1': [1, 1],
+        '16:9': [16, 9],
+        '9:16': [9, 16],
+        '4:3': [4, 3],
+        '3:4': [3, 4],
+        '3:2': [3, 2],
+        '2:3': [2, 3]
+      };
+      const [rw, rh] = ratios[imageOptions.aspectRatio] || [1, 1];
+      const scale = Math.sqrt((baseSize * baseSize) / (rw * rh));
+      imgWidth = Math.round((rw * scale) / 8) * 8;
+      imgHeight = Math.round((rh * scale) / 8) * 8;
+    }
+    
+    // Use provided seed or random
+    const seed = imageOptions.seed != null && imageOptions.seed !== '' 
+      ? parseInt(imageOptions.seed) 
+      : Math.floor(Math.random() * 2147483647);
     
     // Run the inference script with JSON input (same format as generateImage)
     const result = await new Promise((resolve, reject) => {
       const inputData = JSON.stringify({
         prompt: prompt,
-        seed: Math.floor(Math.random() * 2147483647),
-        width: imageSize,
-        height: imageSize,
+        negative_prompt: imageOptions.negativePrompt || undefined,
+        seed: seed,
+        width: imgWidth,
+        height: imgHeight,
+        num_steps: imageOptions.steps || undefined,
+        guidance_scale: imageOptions.guidanceScale != null ? parseFloat(imageOptions.guidanceScale) : undefined,
         model_dir: modelPath,
         model_id: modelId,
         use_sdxl: useSDXL,
@@ -2470,7 +2509,8 @@ ipcMain.handle('local-image-generate', async (event, prompt, quality = 'standard
       });
       
       log(`[LocalImage] Running: ${pythonExe} ${scriptPath}`);
-      log(`[LocalImage] Input: ${inputData.substring(0, 100)}...`);
+      log(`[LocalImage] Image size: ${imgWidth}x${imgHeight}, seed: ${seed}, aspect: ${imageOptions.aspectRatio || '1:1'}`);
+      log(`[LocalImage] Input: ${inputData.substring(0, 200)}...`);
       
       const proc = spawn(pythonExe, [scriptPath, inputData], {
         env: { ...process.env, PYTHONUNBUFFERED: '1' }

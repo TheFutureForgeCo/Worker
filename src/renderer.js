@@ -145,6 +145,7 @@ let currentConversationId = null;
 let isGeneratingChat = false;
 let imageMode = false;
 let imageQuality = 'standard'; // 'standard' or 'high' (SDXL-Turbo)
+let chatTemperature = 0.7;
 let maxPrivacyMode = false;
 let localProcessingMode = false;
 let currentMode = 'chat'; // 'chat' or 'worker'
@@ -1616,12 +1617,16 @@ if (localProcessingToggle) {
         : 'Chat with AI powered by the ComputeGrid network. Toggle Local Processing for 100% offline mode.';
     }
     
-    // Show/hide model selector and image button based on mode (only show for local processing)
+    // Show/hide model selector, image button, and temperature control based on mode
     if (chatModelSelect) {
       chatModelSelect.style.display = localProcessingMode ? 'block' : 'none';
     }
     if (chatImageBtn) {
       chatImageBtn.style.display = localProcessingMode ? 'inline-flex' : 'none';
+    }
+    const tempControl = document.getElementById('chatTemperatureControl');
+    if (tempControl) {
+      tempControl.style.display = (localProcessingMode && !imageMode) ? 'flex' : 'none';
     }
     
     // Update chat title to reflect mode
@@ -1985,7 +1990,27 @@ async function sendChatMessage() {
     
     if (imageMode) {
       // Generate image (always local for now)
-      const result = await window.electronAPI.localImageGenerate(message, imageQuality);
+      const imgOptions = {};
+      const negPromptEl = document.getElementById('imgNegativePrompt');
+      const stepsEl = document.getElementById('imgSteps');
+      const guidanceEl = document.getElementById('imgGuidance');
+      const aspectEl = document.getElementById('imgAspectRatio');
+      const seedEl = document.getElementById('imgSeed');
+      
+      if (negPromptEl && negPromptEl.value.trim()) imgOptions.negativePrompt = negPromptEl.value.trim();
+      if (aspectEl) imgOptions.aspectRatio = aspectEl.value;
+      if (seedEl && seedEl.value) imgOptions.seed = parseInt(seedEl.value);
+      
+      // SDXL-Turbo requires guidance_scale=0.0 and 1-4 steps - enforce limits
+      if (imageQuality === 'high') {
+        imgOptions.steps = Math.min(Math.max(parseInt(stepsEl?.value || 4), 1), 4);
+        imgOptions.guidanceScale = 0.0;
+      } else {
+        if (stepsEl) imgOptions.steps = parseInt(stepsEl.value);
+        if (guidanceEl) imgOptions.guidanceScale = parseFloat(guidanceEl.value);
+      }
+      
+      const result = await window.electronAPI.localImageGenerate(message, imageQuality, imgOptions);
       removeThinkingIndicator();
       
       if (result.success) {
@@ -1996,7 +2021,9 @@ async function sendChatMessage() {
     } else if (localProcessingMode) {
       // Local Processing Mode: Use local Ollama
       const conversationForOllama = chatHistory.slice(-10);
-      await window.electronAPI.localChatStream(message, model, conversationForOllama.slice(0, -1));
+      await window.electronAPI.localChatStream(message, model, conversationForOllama.slice(0, -1), {
+        temperature: chatTemperature
+      });
     } else {
       // Server Mode: Use ComputeGrid network API
       try {
@@ -2064,6 +2091,11 @@ function updateQualitySelection(quality) {
     qualityStandard.querySelector('.quality-radio').classList.toggle('selected', quality === 'standard');
     qualityHigh.querySelector('.quality-radio').classList.toggle('selected', quality === 'high');
   }
+  
+  // Update advanced control defaults for the selected quality
+  if (typeof updateImageControlDefaults === 'function') {
+    updateImageControlDefaults(quality);
+  }
 }
 
 if (qualityStandard) {
@@ -2084,7 +2116,67 @@ if (chatImageBtn) {
     if (imageQualityToggle) {
       imageQualityToggle.style.display = imageMode ? 'flex' : 'none';
     }
+    
+    // Show/hide advanced toggle and temperature control
+    const advToggle = document.getElementById('imageAdvancedToggle');
+    const advPanel = document.getElementById('imageAdvancedPanel');
+    const tempControl = document.getElementById('chatTemperatureControl');
+    if (advToggle) advToggle.style.display = imageMode ? 'flex' : 'none';
+    if (!imageMode && advPanel) advPanel.classList.remove('visible');
+    if (!imageMode && advToggle) advToggle.classList.remove('active');
+    if (tempControl) tempControl.style.display = imageMode ? 'none' : (localProcessingMode ? 'flex' : 'none');
   });
+}
+
+// Temperature slider
+const chatTempSlider = document.getElementById('chatTemperature');
+const chatTempValue = document.getElementById('chatTempValue');
+if (chatTempSlider) {
+  chatTempSlider.addEventListener('input', () => {
+    chatTemperature = parseFloat(chatTempSlider.value);
+    if (chatTempValue) chatTempValue.textContent = chatTemperature.toFixed(1);
+  });
+}
+
+// Image advanced toggle
+const imgAdvToggle = document.getElementById('imageAdvancedToggle');
+const imgAdvPanel = document.getElementById('imageAdvancedPanel');
+if (imgAdvToggle) {
+  imgAdvToggle.addEventListener('click', () => {
+    imgAdvToggle.classList.toggle('active');
+    if (imgAdvPanel) imgAdvPanel.classList.toggle('visible');
+  });
+}
+
+// Image steps slider
+const imgStepsSlider = document.getElementById('imgSteps');
+const imgStepsValue = document.getElementById('imgStepsValue');
+if (imgStepsSlider) {
+  imgStepsSlider.addEventListener('input', () => {
+    if (imgStepsValue) imgStepsValue.textContent = imgStepsSlider.value;
+  });
+}
+
+// Image guidance slider
+const imgGuidanceSlider = document.getElementById('imgGuidance');
+const imgGuidanceValue = document.getElementById('imgGuidanceValue');
+if (imgGuidanceSlider) {
+  imgGuidanceSlider.addEventListener('input', () => {
+    if (imgGuidanceValue) imgGuidanceValue.textContent = parseFloat(imgGuidanceSlider.value).toFixed(1);
+  });
+}
+
+// Update defaults when quality changes
+function updateImageControlDefaults(quality) {
+  if (quality === 'high') {
+    // SDXL-Turbo: max 4 steps, guidance must be 0
+    if (imgStepsSlider) { imgStepsSlider.value = 4; imgStepsSlider.max = 4; imgStepsSlider.min = 1; if (imgStepsValue) imgStepsValue.textContent = '4'; }
+    if (imgGuidanceSlider) { imgGuidanceSlider.value = 0; imgGuidanceSlider.disabled = true; if (imgGuidanceValue) imgGuidanceValue.textContent = '0.0'; }
+  } else {
+    // SD 1.5: up to 50 steps, adjustable guidance
+    if (imgStepsSlider) { imgStepsSlider.value = 35; imgStepsSlider.max = 50; imgStepsSlider.min = 5; if (imgStepsValue) imgStepsValue.textContent = '35'; }
+    if (imgGuidanceSlider) { imgGuidanceSlider.value = 7.5; imgGuidanceSlider.disabled = false; if (imgGuidanceValue) imgGuidanceValue.textContent = '7.5'; }
+  }
 }
 
 // Listen for streaming chat tokens
