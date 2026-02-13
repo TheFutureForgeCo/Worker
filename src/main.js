@@ -4080,6 +4080,36 @@ ipcMain.handle('generate-image', async (event, params) => {
   return await generateImage(params);
 });
 
+ipcMain.handle('save-image-to-downloads', async (event, imagePath) => {
+  try {
+    if (!imagePath || typeof imagePath !== 'string') {
+      return { success: false, error: 'Invalid image path' };
+    }
+    
+    // Only allow saving local file paths (reject URLs and other schemes)
+    if (imagePath.includes('://') || imagePath.startsWith('data:')) {
+      log(`[SaveImage] Rejected non-local path: ${imagePath.substring(0, 50)}`);
+      return { success: false, error: 'Only local images can be saved' };
+    }
+    
+    const downloadsDir = app.getPath('downloads');
+    const fileName = `computegrid-image-${Date.now()}.png`;
+    const destPath = path.join(downloadsDir, fileName);
+    
+    if (!fs.existsSync(imagePath)) {
+      log(`[SaveImage] Source file not found: ${imagePath}`);
+      return { success: false, error: 'Image file not found' };
+    }
+    
+    fs.copyFileSync(imagePath, destPath);
+    log(`[SaveImage] Image saved to: ${destPath}`);
+    return { success: true, path: destPath };
+  } catch (err) {
+    log(`[SaveImage] Error saving image: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle('download-image-ai', async () => {
   log('[ImageAI] Starting full Image AI setup...');
   

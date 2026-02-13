@@ -1714,16 +1714,35 @@ function renderChatMessages() {
     return;
   }
   
-  chatMessages.innerHTML = chatHistory.map((msg, idx) => `
+  chatMessages.innerHTML = chatHistory.map((msg, idx) => {
+    const imageHtml = msg.image 
+      ? `<div class="chat-message-image-wrapper">
+          <img class="chat-message-image" src="file://${msg.image}" alt="Generated image">
+          <button class="chat-image-download" data-path="${msg.image}" title="Save image">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+          </button>
+        </div>` 
+      : '';
+    
+    return `
     <div class="chat-message ${msg.role}" data-idx="${idx}">
       <div class="chat-message-avatar">${msg.role === 'user' ? '👤' : '🤖'}</div>
       <div class="chat-message-content">
         ${formatChatContent(msg.content)}
-        ${msg.image ? `<img class="chat-message-image" src="file://${msg.image}" alt="Generated image">` : ''}
+        ${imageHtml}
       </div>
-      <button class="chat-message-delete" data-idx="${idx}" title="Delete message">×</button>
-    </div>
-  `).join('');
+      <button class="chat-message-delete" data-idx="${idx}" title="Delete message">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="3 6 5 6 21 6"></polyline>
+          <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"></path>
+        </svg>
+      </button>
+    </div>`;
+  }).join('');
   
   // Add delete handlers
   chatMessages.querySelectorAll('.chat-message-delete').forEach(btn => {
@@ -1734,8 +1753,160 @@ function renderChatMessages() {
     });
   });
   
+  // Add right-click context menu on messages
+  chatMessages.querySelectorAll('.chat-message').forEach(msgEl => {
+    msgEl.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const idx = parseInt(msgEl.dataset.idx);
+      showMessageContextMenu(e.clientX, e.clientY, idx);
+    });
+  });
+  
+  // Add image download handlers
+  chatMessages.querySelectorAll('.chat-image-download').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const imagePath = btn.dataset.path;
+      try {
+        const result = await window.electronAPI.saveImageToDownloads(imagePath);
+        if (result.success) {
+          showToast('Image saved to Downloads');
+        } else {
+          showToast('Failed to save image');
+        }
+      } catch (err) {
+        console.error('Failed to save image:', err);
+        showToast('Failed to save image');
+      }
+    });
+  });
+  
   // Scroll to bottom
   chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// Show context menu for a message
+function showMessageContextMenu(x, y, idx) {
+  // Remove any existing context menu
+  const existing = document.querySelector('.chat-context-menu');
+  if (existing) existing.remove();
+  
+  const msg = chatHistory[idx];
+  if (!msg) return;
+  
+  const menu = document.createElement('div');
+  menu.className = 'chat-context-menu';
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  
+  let menuItems = '';
+  
+  // Copy text option
+  menuItems += `
+    <button class="chat-context-menu-item" data-action="copy">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+        <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path>
+      </svg>
+      Copy text
+    </button>`;
+  
+  // Save image option (if message has an image)
+  if (msg.image) {
+    menuItems += `
+      <button class="chat-context-menu-item" data-action="save-image">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"></path>
+          <polyline points="7 10 12 15 17 10"></polyline>
+          <line x1="12" y1="15" x2="12" y2="3"></line>
+        </svg>
+        Save image
+      </button>`;
+  }
+  
+  // Delete option
+  menuItems += `
+    <button class="chat-context-menu-item danger" data-action="delete">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="3 6 5 6 21 6"></polyline>
+        <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"></path>
+      </svg>
+      Delete message
+    </button>`;
+  
+  menu.innerHTML = menuItems;
+  document.body.appendChild(menu);
+  
+  // Keep menu in viewport
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) {
+    menu.style.left = `${window.innerWidth - rect.width - 8}px`;
+  }
+  if (rect.bottom > window.innerHeight) {
+    menu.style.top = `${window.innerHeight - rect.height - 8}px`;
+  }
+  
+  // Handle menu item clicks
+  menu.querySelectorAll('.chat-context-menu-item').forEach(item => {
+    item.addEventListener('click', async () => {
+      const action = item.dataset.action;
+      menu.remove();
+      
+      if (action === 'copy') {
+        try {
+          await navigator.clipboard.writeText(msg.content || '');
+          showToast('Copied to clipboard');
+        } catch (err) {
+          console.error('Copy failed:', err);
+        }
+      } else if (action === 'save-image' && msg.image) {
+        try {
+          const result = await window.electronAPI.saveImageToDownloads(msg.image);
+          if (result.success) {
+            showToast('Image saved to Downloads');
+          } else {
+            showToast('Failed to save image');
+          }
+        } catch (err) {
+          showToast('Failed to save image');
+        }
+      } else if (action === 'delete') {
+        deleteMessage(idx);
+      }
+    });
+  });
+  
+  // Close menu on click outside
+  const closeMenu = (e) => {
+    if (!menu.contains(e.target)) {
+      menu.remove();
+      document.removeEventListener('click', closeMenu);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', closeMenu), 0);
+}
+
+// Show a toast notification
+function showToast(message) {
+  // Remove existing toast
+  const existing = document.querySelector('.chat-toast');
+  if (existing) existing.remove();
+  
+  const toast = document.createElement('div');
+  toast.className = 'chat-toast';
+  toast.textContent = message;
+  document.body.appendChild(toast);
+  
+  // Trigger animation
+  requestAnimationFrame(() => {
+    toast.classList.add('show');
+  });
+  
+  // Auto-dismiss
+  setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 300);
+  }, 2500);
 }
 
 // Delete a single message

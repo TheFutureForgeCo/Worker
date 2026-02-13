@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   reportBenchmark: (benchmarkTimeMs) => ipcRenderer.invoke('report-benchmark', benchmarkTimeMs),
   retryImageBenchmark: () => ipcRenderer.invoke('retry-image-benchmark'),
   generateImage: (params) => ipcRenderer.invoke('generate-image', params),
+  saveImageToDownloads: (imagePath) => ipcRenderer.invoke('save-image-to-downloads', imagePath),
   
   // Bundle management (pre-packaged AI assets)
   checkBundleStatus: () => ipcRenderer.invoke('check-bundle-status'),

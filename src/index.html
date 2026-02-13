@@ -68,7 +68,6 @@
       align-items: center;
       justify-content: center;
       flex: 1;
-      -webkit-app-region: no-drag;
     }
 
     .header-right {
@@ -77,10 +76,17 @@
       gap: 8px;
       flex: 1;
       justify-content: flex-end;
-      -webkit-app-region: no-drag;
     }
 
     .header-actions, .header-actions * {
+      -webkit-app-region: no-drag;
+    }
+
+    .mode-tabs, .mode-tabs * {
+      -webkit-app-region: no-drag;
+    }
+
+    .window-controls, .window-controls * {
       -webkit-app-region: no-drag;
     }
 
@@ -1328,33 +1334,144 @@
     .chat-message-delete {
       position: absolute;
       top: 4px;
-      right: -24px;
-      width: 20px;
-      height: 20px;
+      right: -28px;
+      width: 22px;
+      height: 22px;
       border-radius: 4px;
       border: none;
       background: transparent;
       color: var(--text-muted);
       cursor: pointer;
-      font-size: 14px;
-      display: none;
+      display: flex;
       align-items: center;
       justify-content: center;
       transition: all var(--transition);
+      opacity: 0;
+      visibility: hidden;
+    }
+
+    .chat-message:hover .chat-message-delete {
+      opacity: 1;
+      visibility: visible;
     }
 
     .chat-message.user .chat-message-delete {
       right: auto;
-      left: -24px;
-    }
-
-    .chat-message:hover .chat-message-delete {
-      display: flex;
+      left: -28px;
     }
 
     .chat-message-delete:hover {
-      background: var(--danger);
+      background: hsla(0, 72%, 51%, 0.15);
+      color: var(--danger);
+    }
+
+    .chat-message-delete svg {
+      width: 14px;
+      height: 14px;
+    }
+
+    .chat-message-image-wrapper {
+      position: relative;
+      display: inline-block;
+      margin-top: 8px;
+    }
+
+    .chat-image-download {
+      position: absolute;
+      bottom: 8px;
+      right: 8px;
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius);
+      border: none;
+      background: hsla(222, 47%, 7%, 0.7);
       color: white;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      transition: all var(--transition);
+      backdrop-filter: blur(4px);
+    }
+
+    .chat-message-image-wrapper:hover .chat-image-download {
+      opacity: 1;
+    }
+
+    .chat-image-download:hover {
+      background: var(--primary);
+    }
+
+    .chat-image-download svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    .chat-context-menu {
+      position: fixed;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      padding: 4px;
+      min-width: 160px;
+      z-index: 1000;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+    }
+
+    .chat-context-menu-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 4px;
+      border: none;
+      background: transparent;
+      color: var(--text-primary);
+      cursor: pointer;
+      font-size: 13px;
+      width: 100%;
+      text-align: left;
+      transition: all var(--transition);
+    }
+
+    .chat-context-menu-item:hover {
+      background: var(--bg-tertiary);
+    }
+
+    .chat-context-menu-item.danger {
+      color: var(--danger);
+    }
+
+    .chat-context-menu-item.danger:hover {
+      background: hsla(0, 72%, 51%, 0.15);
+    }
+
+    .chat-context-menu-item svg {
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+    }
+
+    .chat-toast {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-color);
+      color: var(--text-primary);
+      padding: 10px 20px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      z-index: 2000;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+      transition: transform 0.3s ease;
+      pointer-events: none;
+    }
+
+    .chat-toast.show {
+      transform: translateX(-50%) translateY(0);
     }
 
     .chat-message-avatar {
