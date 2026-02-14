@@ -24,6 +24,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 import json
 import time
 import base64
+import gc
 import torch
 import numpy as np
 from io import BytesIO
@@ -269,24 +270,23 @@ def main():
         log("-" * 40)
         
         pipeline_load_start = time.time()
+        sdxl_fell_back_to_sd15 = False
+        
         # Import the appropriate pipeline based on model type
         if use_sdxl:
             try:
-                from optimum.onnxruntime import ORTStableDiffusionXLPipeline as ORTPipeline
+                from optimum.onnxruntime import ORTStableDiffusionXLPipeline as ORTPipelineXL
             except ImportError as e:
                 log(f"ERROR: ORTStableDiffusionXLPipeline not available!")
                 log(f"Import error: {e}")
-                log("This requires optimum>=1.13.0. Please delete image-ai folder and re-download.")
-                raise ImportError(
-                    "SDXL pipeline requires optimum>=1.13.0. Please delete the image-ai folder "
-                    "in your AppData/Roaming/computegrid-worker directory and restart the app "
-                    "to re-download dependencies with SDXL support."
-                )
-            # Use stabilityai/sdxl-turbo and export to ONNX
-            # Note: onnxruntime/sdxl-turbo is NOT compatible with optimum's ORTStableDiffusionXLPipeline
-            # We must use the original model and export with export=True
+                log("Falling back to SD 1.5 standard quality")
+                use_sdxl = False
+                sdxl_fell_back_to_sd15 = True
+        
+        if use_sdxl:
+            ORTPipeline = ORTPipelineXL
             default_model_id = "stabilityai/sdxl-turbo"
-            log("Using SDXL-Turbo pipeline (ORTStableDiffusionXLPipeline with export=True)")
+            log("Using SDXL-Turbo pipeline")
         else:
             from optimum.onnxruntime import ORTStableDiffusionPipeline as ORTPipeline
             default_model_id = "runwayml/stable-diffusion-v1-5"
@@ -297,53 +297,98 @@ def main():
         provider_verified = False
         nsfw_filter_disabled = False
         
-        # Try each provider in order until one works
+        # Determine ONNX cache path for this model
+        onnx_model_id = model_id if model_id else default_model_id
+        has_local_cache = model_dir and os.path.exists(os.path.join(model_dir, "model_index.json"))
+        
+        # --- SDXL: Export once to cache, then load from cache ---
+        if use_sdxl and not has_local_cache:
+            log("No local ONNX cache found for SDXL-Turbo. Exporting once...")
+            log("This downloads the model and converts to ONNX (first time only).")
+            log("NOTE: export=True requires significant RAM. If this fails, will fall back to SD 1.5.")
+            
+            try:
+                log(f"Exporting SDXL model to ONNX: {onnx_model_id}")
+                export_pipe = ORTPipeline.from_pretrained(
+                    onnx_model_id,
+                    export=True,
+                    provider='CPUExecutionProvider'
+                )
+                
+                if model_dir:
+                    log(f"Saving ONNX model to local cache: {model_dir}")
+                    os.makedirs(model_dir, exist_ok=True)
+                    export_pipe.save_pretrained(model_dir)
+                    has_local_cache = True
+                    log("ONNX export saved successfully!")
+                
+                del export_pipe
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                log("Freed export memory. Will now load from cache with GPU provider.")
+                
+            except Exception as export_err:
+                err_str = str(export_err).lower()
+                log(f"SDXL export failed: {export_err}")
+                
+                if ("bad allocation" in err_str or "out of memory" in err_str or
+                    "memory" in err_str or "allocat" in err_str):
+                    log("SDXL-Turbo requires too much memory to export on this system.")
+                else:
+                    log(f"SDXL export error (non-memory): {export_err}")
+                
+                log("Falling back to SD 1.5 standard quality...")
+                use_sdxl = False
+                sdxl_fell_back_to_sd15 = True
+                
+                del export_err
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                
+                from optimum.onnxruntime import ORTStableDiffusionPipeline as ORTPipeline
+                default_model_id = "runwayml/stable-diffusion-v1-5"
+                onnx_model_id = default_model_id
+                has_local_cache = False
+                log("Switched to SD 1.5 pipeline")
+        
+        # --- Load pipeline from cache or download (works for both SD 1.5 and cached SDXL) ---
         for provider_name, provider_desc in providers_to_try:
             log(f"Attempting to load with {provider_name}...")
             try:
-                if model_dir and os.path.exists(os.path.join(model_dir, "model_index.json")):
-                    log(f"Loading from local ONNX model: {model_dir}")
+                if has_local_cache:
+                    log(f"Loading from local ONNX cache: {model_dir}")
                     pipe = ORTPipeline.from_pretrained(
                         model_dir,
                         provider=provider_name
                     )
                 else:
-                    # Download and convert model to ONNX
-                    onnx_model_id = model_id if model_id else default_model_id
-                    log(f"Downloading model: {onnx_model_id}")
-                    
                     if use_sdxl:
-                        # SDXL: Must use export=True because onnxruntime/sdxl-turbo is incompatible
-                        # with optimum's ORTStableDiffusionXLPipeline. Export from stabilityai/sdxl-turbo.
-                        log(f"Exporting SDXL model to ONNX format (this may take a few minutes first time)...")
+                        raise Exception("SDXL ONNX cache not found - export phase should have created it. Cannot load SDXL without cache.")
+                    
+                    log(f"Downloading SD 1.5 model: {onnx_model_id}")
+                    try:
+                        log(f"Loading pre-exported ONNX model...")
+                        pipe = ORTPipeline.from_pretrained(
+                            onnx_model_id,
+                            revision="onnx",
+                            provider=provider_name
+                        )
+                    except Exception as onnx_err:
+                        log(f"ONNX revision failed: {onnx_err}")
+                        log(f"Exporting model to ONNX format...")
                         pipe = ORTPipeline.from_pretrained(
                             onnx_model_id,
                             export=True,
                             provider=provider_name
                         )
-                    else:
-                        # SD 1.5: Try onnx revision first (faster), then export as fallback
-                        try:
-                            log(f"Loading pre-exported ONNX model...")
-                            pipe = ORTPipeline.from_pretrained(
-                                onnx_model_id,
-                                revision="onnx",
-                                provider=provider_name
-                            )
-                        except Exception as onnx_err:
-                            log(f"ONNX revision failed: {onnx_err}")
-                            log(f"Exporting model to ONNX format...")
-                            pipe = ORTPipeline.from_pretrained(
-                                onnx_model_id,
-                                export=True,
-                                provider=provider_name
-                            )
                     
-                    # Save for future use
-                    if model_dir:
+                    if model_dir and not has_local_cache:
                         log(f"Saving ONNX model to: {model_dir}")
                         os.makedirs(model_dir, exist_ok=True)
                         pipe.save_pretrained(model_dir)
+                        has_local_cache = True
                 
                 # Check if the provider is actually active
                 if hasattr(pipe, 'unet') and hasattr(pipe.unet, 'session'):
@@ -355,7 +400,6 @@ def main():
                         break
                     else:
                         log(f"WARNING: {provider_name} requested but got {session_providers}")
-                        # If we got CPU when we asked for GPU, try the next provider
                         if provider_name != 'CPUExecutionProvider' and 'CPUExecutionProvider' in session_providers:
                             log(f"Falling back to next provider...")
                             pipe = None
@@ -368,13 +412,56 @@ def main():
                     break
                     
             except Exception as load_err:
+                err_str = str(load_err).lower()
                 log(f"Failed to load with {provider_name}: {load_err}")
-                if provider_name == 'CUDAExecutionProvider':
+                
+                if "bad allocation" in err_str or "out of memory" in err_str:
+                    log(f"{provider_name} failed due to memory limits")
+                elif provider_name == 'CUDAExecutionProvider':
                     log("CUDA failed - this usually means CUDA Toolkit is not installed.")
-                    log("Install CUDA Toolkit from https://developer.nvidia.com/cuda-downloads")
                     log("Or the system will fall back to DirectML/CPU.")
+                
                 pipe = None
                 continue
+        
+        # If SDXL loaded from cache but ALL providers failed, fall back to SD 1.5
+        if pipe is None and use_sdxl:
+            log("SDXL-Turbo failed with all providers. Falling back to SD 1.5...")
+            use_sdxl = False
+            sdxl_fell_back_to_sd15 = True
+            
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            from optimum.onnxruntime import ORTStableDiffusionPipeline as ORTPipeline
+            default_model_id = "runwayml/stable-diffusion-v1-5"
+            onnx_model_id = default_model_id
+            
+            for provider_name, provider_desc in providers_to_try:
+                log(f"[SD1.5 fallback] Attempting {provider_name}...")
+                try:
+                    try:
+                        pipe = ORTPipeline.from_pretrained(
+                            onnx_model_id,
+                            revision="onnx",
+                            provider=provider_name
+                        )
+                    except Exception:
+                        pipe = ORTPipeline.from_pretrained(
+                            onnx_model_id,
+                            export=True,
+                            provider=provider_name
+                        )
+                    
+                    actual_provider = provider_name
+                    provider_verified = True
+                    log(f"[SD1.5 fallback] SUCCESS with {provider_name}")
+                    break
+                except Exception as fb_err:
+                    log(f"[SD1.5 fallback] Failed with {provider_name}: {fb_err}")
+                    pipe = None
+                    continue
         
         if pipe is None:
             raise Exception("Failed to load pipeline with any provider")
@@ -421,17 +508,22 @@ def main():
         log(f"Random seed set: {seed}")
         
         # SDXL-Turbo uses very few steps (1-4) with no guidance needed
-        # Regular SDXL would use 30 steps with guidance 7.0
         # SD 1.5 uses 35 steps with guidance 7.5
+        # If we fell back from SDXL to SD 1.5, override the user's SDXL settings
         user_steps = input_data.get("num_steps", None)
         user_guidance = input_data.get("guidance_scale", None)
         
         if use_sdxl:
             num_steps = 2 if is_benchmark else (min(max(user_steps, 1), 4) if user_steps else 4)
-            guidance_scale = 0.0  # SDXL-Turbo requires guidance_scale=0.0 always
+            guidance_scale = 0.0
         else:
-            num_steps = 20 if is_benchmark else (min(max(user_steps, 5), 50) if user_steps else 35)
-            guidance_scale = user_guidance if user_guidance is not None else 7.5
+            if sdxl_fell_back_to_sd15:
+                num_steps = 20 if is_benchmark else 25
+                guidance_scale = 7.5
+                log("Using SD 1.5 defaults (overriding SDXL settings after fallback)")
+            else:
+                num_steps = 20 if is_benchmark else (min(max(user_steps, 5), 50) if user_steps else 35)
+                guidance_scale = user_guidance if user_guidance is not None else 7.5
         
         log(f"Inference steps: {num_steps}")
         log(f"Guidance scale: {guidance_scale}")
@@ -472,7 +564,8 @@ def main():
                       "cuda out of memory" in err_str or
                       "failed to allocat" in err_str or
                       "memory allocation" in err_str or
-                      "insufficient memory" in err_str)
+                      "insufficient memory" in err_str or
+                      "bad allocation" in err_str)
             
             if is_oom and (width > 512 or height > 512):
                 log(f"Full image generation failed: {oom_err}")
@@ -554,6 +647,7 @@ def main():
             "provider_verified": provider_verified,
             "nsfw_filter_disabled": nsfw_filter_disabled,
             "used_tiling": used_tiling,
+            "sdxl_fallback_to_sd15": sdxl_fell_back_to_sd15,
             "image_stats": {
                 "min": int(img_min),
                 "max": int(img_max),

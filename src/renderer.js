@@ -2025,8 +2025,11 @@ async function sendChatMessage() {
       removeThinkingIndicator();
       
       if (result.success) {
-        const tilingNote = result.usedTiling ? ' (tiled generation)' : '';
-        chatHistory.push({ role: 'assistant', content: `Here's your generated image${tilingNote}:`, image: result.path });
+        const notes = [];
+        if (result.used_tiling) notes.push('tiled generation');
+        if (result.sdxl_fallback_to_sd15) notes.push('used standard quality - high quality model too large for your GPU');
+        const noteStr = notes.length > 0 ? ` (${notes.join(', ')})` : '';
+        chatHistory.push({ role: 'assistant', content: `Here's your generated image${noteStr}:`, image: result.path });
         resetImageSettingsToDefaults();
       } else {
         chatHistory.push({ role: 'assistant', content: `Failed to generate image: ${parseImageError(result.error)}` });
@@ -2434,7 +2437,7 @@ function resetImageSettingsToDefaults() {
 function parseImageError(rawError) {
   if (!rawError) return 'Unknown error';
   const err = String(rawError);
-  if (err.includes('out of memory') || err.includes('OOM') || err.includes('CUDA out of memory')) {
+  if (err.includes('out of memory') || err.includes('OOM') || err.includes('CUDA out of memory') || err.includes('bad allocation')) {
     return 'GPU ran out of memory. Try a smaller image size or fewer steps.';
   }
   if (err.includes('ENOENT') || err.includes('No such file')) {
