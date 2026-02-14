@@ -815,32 +815,57 @@ async function checkOllamaRunning() {
   });
 }
 
-// Ensure Ollama is running, start it if not (used by local chat)
+// Ensure Ollama is running and has a model available (used by local chat)
 async function ensureOllamaRunning() {
-  const running = await checkOllamaRunning();
-  if (running) return true;
+  let running = await checkOllamaRunning();
   
-  log('[ensureOllama] Ollama not running, attempting to start...');
-  
-  const installed = await checkOllama();
-  if (!installed) {
-    log('[ensureOllama] Ollama not installed');
-    throw new Error('Ollama is not installed. Please restart the app to set up AI.');
-  }
-  
-  await startOllamaService();
-  
-  // Wait and verify with retries
-  for (let i = 0; i < 10; i++) {
-    await new Promise(r => setTimeout(r, 1000));
-    const nowRunning = await checkOllamaRunning();
-    if (nowRunning) {
-      log('[ensureOllama] Ollama started successfully');
-      return true;
+  if (!running) {
+    log('[ensureOllama] Ollama not running, attempting to start...');
+    
+    const installed = await checkOllama();
+    if (!installed) {
+      log('[ensureOllama] Ollama not installed');
+      throw new Error('Ollama is not installed. Please restart the app to set up AI.');
+    }
+    
+    await startOllamaService();
+    
+    // Wait and verify with retries
+    for (let i = 0; i < 10; i++) {
+      await new Promise(r => setTimeout(r, 1000));
+      running = await checkOllamaRunning();
+      if (running) {
+        log('[ensureOllama] Ollama started successfully');
+        break;
+      }
+    }
+    
+    if (!running) {
+      throw new Error('Could not start Ollama. Please restart the app.');
     }
   }
   
-  throw new Error('Could not start Ollama. Please restart the app.');
+  // Check if at least one model is available
+  const models = await getOllamaModels();
+  if (models.length === 0) {
+    log('[ensureOllama] No models found, pulling default model...');
+    const totalMem = os.totalmem() / (1024 * 1024 * 1024);
+    const modelToPull = totalMem >= 8 ? 'mistral' : 'tinyllama';
+    
+    if (mainWindow) {
+      mainWindow.webContents.send('local-chat-error', `Downloading AI model (${modelToPull})... This may take a few minutes on first use.`);
+    }
+    
+    try {
+      await pullModel(modelToPull);
+      log(`[ensureOllama] Model ${modelToPull} pulled successfully`);
+    } catch (err) {
+      log(`[ensureOllama] Model pull failed: ${err.message}`);
+      throw new Error(`Failed to download AI model. Please check your internet connection and restart the app.`);
+    }
+  }
+  
+  return true;
 }
 
 // Start Ollama service (using local binary if available)
@@ -2343,7 +2368,23 @@ ipcMain.handle('local-chat-send', async (event, message, model, conversationHist
       'mistral': 'mistral:7b',
       'tinyllama': 'tinyllama:1.1b'
     };
-    const ollamaModel = modelMap[model] || 'mistral:7b';
+    let ollamaModel = modelMap[model] || 'mistral:7b';
+    
+    // Check if the requested model is available, fall back to any available model
+    const availableModels = await getOllamaModels();
+    const modelNames = availableModels.map(m => m.name);
+    if (!modelNames.some(n => n.startsWith(ollamaModel.split(':')[0]))) {
+      if (modelNames.length > 0) {
+        log(`[LocalChat] Requested model ${ollamaModel} not found, using ${modelNames[0]}`);
+        ollamaModel = modelNames[0];
+      } else {
+        try {
+          await pullModel(model);
+        } catch (pullErr) {
+          throw new Error(`AI model "${model}" is not available and could not be downloaded.`);
+        }
+      }
+    }
     
     // Build messages array for Ollama
     const messages = conversationHistory.map(msg => ({
@@ -2396,7 +2437,28 @@ ipcMain.handle('local-chat-stream', async (event, message, model, conversationHi
       'mistral': 'mistral:7b',
       'tinyllama': 'tinyllama:1.1b'
     };
-    const ollamaModel = modelMap[model] || 'mistral:7b';
+    let ollamaModel = modelMap[model] || 'mistral:7b';
+    
+    // Check if the requested model is available, fall back to any available model
+    const availableModels = await getOllamaModels();
+    const modelNames = availableModels.map(m => m.name);
+    if (!modelNames.some(n => n.startsWith(ollamaModel.split(':')[0]))) {
+      if (modelNames.length > 0) {
+        log(`[LocalChat] Requested model ${ollamaModel} not found, falling back to ${modelNames[0]}`);
+        ollamaModel = modelNames[0];
+      } else {
+        // No models at all - try to pull the requested one
+        log(`[LocalChat] No models available, pulling ${model}...`);
+        if (mainWindow) {
+          mainWindow.webContents.send('local-chat-token', `Downloading AI model (${model})... Please wait.\n\n`);
+        }
+        try {
+          await pullModel(model);
+        } catch (pullErr) {
+          throw new Error(`AI model "${model}" is not available and could not be downloaded. Please check your internet connection.`);
+        }
+      }
+    }
     
     const temperature = options.temperature ?? 0.7;
     const systemPrompt = options.systemPrompt || 'You are a helpful, knowledgeable AI assistant. Respond naturally and conversationally. Be thorough but concise. Use markdown formatting when it helps readability (headings, lists, code blocks, bold/italic). If you are unsure about something, say so honestly rather than making things up.';
@@ -2411,7 +2473,7 @@ ipcMain.handle('local-chat-stream', async (event, message, model, conversationHi
     }
     messages.push({ role: 'user', content: message });
     
-    log(`[LocalChat] Sending ${messages.length} messages (temp=${temperature})`);
+    log(`[LocalChat] Sending ${messages.length} messages to ${ollamaModel} (temp=${temperature})`);
     
     const response = await fetch(`${OLLAMA_HOST}/api/chat`, {
       method: 'POST',
