@@ -309,7 +309,7 @@ def main():
             
             try:
                 log(f"Exporting SDXL model to ONNX: {onnx_model_id}")
-                export_pipe = ORTPipeline.from_pretrained(
+                export_pipe = ORTPipelineXL.from_pretrained(
                     onnx_model_id,
                     export=True,
                     provider='CPUExecutionProvider'
@@ -359,10 +359,17 @@ def main():
             try:
                 if has_local_cache:
                     log(f"Loading from local ONNX cache: {model_dir}")
-                    pipe = ORTPipeline.from_pretrained(
-                        model_dir,
-                        provider=provider_name
-                    )
+                    if use_sdxl:
+                        log(f"Using ORTStableDiffusionXLPipeline for SDXL model")
+                        pipe = ORTPipelineXL.from_pretrained(
+                            model_dir,
+                            provider=provider_name
+                        )
+                    else:
+                        pipe = ORTPipeline.from_pretrained(
+                            model_dir,
+                            provider=provider_name
+                        )
                 else:
                     if use_sdxl:
                         raise Exception("SDXL ONNX cache not found - export phase should have created it. Cannot load SDXL without cache.")
@@ -467,7 +474,21 @@ def main():
             raise Exception("Failed to load pipeline with any provider")
         
         provider = actual_provider or provider
+        pipe_class = type(pipe).__name__
         log(f"Pipeline loaded successfully with {provider}")
+        log(f"Pipeline class: {pipe_class}")
+        if use_sdxl and 'XL' not in pipe_class and 'xl' not in pipe_class.lower():
+            log(f"WARNING: SDXL mode but pipeline class is {pipe_class} - forcing XL pipeline")
+            try:
+                pipe = ORTPipelineXL.from_pretrained(
+                    model_dir if has_local_cache else onnx_model_id,
+                    provider=provider
+                )
+                log(f"Re-loaded with ORTStableDiffusionXLPipeline successfully")
+            except Exception as xl_err:
+                log(f"Failed to force XL pipeline: {xl_err}. Falling back to SD 1.5.")
+                use_sdxl = False
+                sdxl_fell_back_to_sd15 = True
         
         # Disable NSFW safety checker to prevent black images
         # The safety checker replaces "inappropriate" content with black images
