@@ -248,17 +248,34 @@ function getOrCreateDeviceId() {
 }
 
 // Logging functions
+const APP_LOG_PATH = path.join(app.getPath('userData'), 'app.log');
+
 function log(message) {
   const timestamp = new Date().toISOString();
-  console.log(`[${timestamp}] ${message}`);
+  const line = `[${timestamp}] ${message}`;
+  console.log(line);
+  try {
+    fs.appendFileSync(APP_LOG_PATH, line + '\n');
+  } catch (e) {}
 }
 
 function logError(message, error) {
   const timestamp = new Date().toISOString();
   const errorMsg = error ? `${message}: ${error.message || error}` : message;
-  console.error(`[${timestamp}] ERROR: ${errorMsg}`);
+  const line = `[${timestamp}] ERROR: ${errorMsg}`;
+  console.error(line);
+  try {
+    fs.appendFileSync(APP_LOG_PATH, line + '\n');
+  } catch (e) {}
   lastError = errorMsg;
   sendStatusToRenderer();
+}
+
+function clearPrivacyLogs() {
+  try {
+    fs.writeFileSync(APP_LOG_PATH, `[${new Date().toISOString()}] Privacy logs cleared\n`);
+    log('[Privacy] Logs cleared after disabling maximum privacy mode');
+  } catch (e) {}
 }
 
 // Helper: Get estimated VRAM for known GPU models (WMI can't report >4GB correctly)
@@ -1155,6 +1172,42 @@ async function getOllamaModels() {
       resolve([]);
     });
   });
+}
+
+async function resolveOllamaModel(requestedModel) {
+  const modelMap = {
+    'mistral': 'mistral',
+    'tinyllama': 'tinyllama'
+  };
+  const baseModelName = modelMap[requestedModel] || requestedModel.split(':')[0] || 'mistral';
+  
+  const availableModels = await getOllamaModels();
+  const modelNames = availableModels.map(m => m.name);
+  
+  const exactMatch = modelNames.find(n => n === requestedModel);
+  if (exactMatch) return exactMatch;
+  
+  const baseMatch = modelNames.find(n => n.split(':')[0] === baseModelName);
+  if (baseMatch) {
+    log(`[Ollama] Resolved ${requestedModel} -> ${baseMatch}`);
+    return baseMatch;
+  }
+  
+  if (modelNames.length > 0) {
+    log(`[Ollama] Model ${requestedModel} not found, falling back to ${modelNames[0]}`);
+    return modelNames[0];
+  }
+  
+  log(`[Ollama] No models available, pulling ${baseModelName}...`);
+  try {
+    await pullModel(baseModelName);
+    const updatedModels = await getOllamaModels();
+    if (updatedModels.length > 0) return updatedModels[0].name;
+  } catch (pullErr) {
+    log(`[Ollama] Failed to pull ${baseModelName}: ${pullErr.message}`);
+  }
+  
+  throw new Error(`AI model "${requestedModel}" is not available and could not be downloaded. Please check your internet connection.`);
 }
 
 // Pull Ollama model (uses local binary if available)
@@ -2346,6 +2399,9 @@ ipcMain.handle('set-max-privacy-mode', async (event, enabled) => {
   log(`[Privacy] Setting maximum privacy mode: ${enabled}`);
   config.maxPrivacyMode = enabled;
   saveConfig();
+  if (!enabled) {
+    clearPrivacyLogs();
+  }
   sendStatusToRenderer();
   return true;
 });
@@ -2355,36 +2411,18 @@ ipcMain.handle('get-max-privacy-mode', async () => {
   return config.maxPrivacyMode || false;
 });
 
+// Get log file path for diagnostics
+ipcMain.handle('get-log-path', async () => {
+  return APP_LOG_PATH;
+});
+
 // Local chat send - direct Ollama communication (no server)
 ipcMain.handle('local-chat-send', async (event, message, model, conversationHistory) => {
   log(`[LocalChat] Sending message to ${model}: ${message.substring(0, 50)}...`);
   
   try {
-    // Ensure Ollama is running before attempting chat
     await ensureOllamaRunning();
-    
-    // Map friendly model names to actual Ollama model names
-    const modelMap = {
-      'mistral': 'mistral:7b',
-      'tinyllama': 'tinyllama:1.1b'
-    };
-    let ollamaModel = modelMap[model] || 'mistral:7b';
-    
-    // Check if the requested model is available, fall back to any available model
-    const availableModels = await getOllamaModels();
-    const modelNames = availableModels.map(m => m.name);
-    if (!modelNames.some(n => n.startsWith(ollamaModel.split(':')[0]))) {
-      if (modelNames.length > 0) {
-        log(`[LocalChat] Requested model ${ollamaModel} not found, using ${modelNames[0]}`);
-        ollamaModel = modelNames[0];
-      } else {
-        try {
-          await pullModel(model);
-        } catch (pullErr) {
-          throw new Error(`AI model "${model}" is not available and could not be downloaded.`);
-        }
-      }
-    }
+    const ollamaModel = await resolveOllamaModel(model);
     
     // Build messages array for Ollama
     const messages = conversationHistory.map(msg => ({
@@ -2405,6 +2443,8 @@ ipcMain.handle('local-chat-send', async (event, message, model, conversationHist
     });
     
     if (!response.ok) {
+      const errBody = await response.text().catch(() => '');
+      log(`[LocalChat] Ollama error ${response.status}: ${errBody}`);
       throw new Error(`Ollama error: ${response.statusText}`);
     }
     
@@ -2430,35 +2470,8 @@ ipcMain.handle('local-chat-stream', async (event, message, model, conversationHi
   log(`[LocalChat] Starting stream to ${model}: ${message.substring(0, 50)}...`);
   
   try {
-    // Ensure Ollama is running before attempting chat
     await ensureOllamaRunning();
-    
-    const modelMap = {
-      'mistral': 'mistral:7b',
-      'tinyllama': 'tinyllama:1.1b'
-    };
-    let ollamaModel = modelMap[model] || 'mistral:7b';
-    
-    // Check if the requested model is available, fall back to any available model
-    const availableModels = await getOllamaModels();
-    const modelNames = availableModels.map(m => m.name);
-    if (!modelNames.some(n => n.startsWith(ollamaModel.split(':')[0]))) {
-      if (modelNames.length > 0) {
-        log(`[LocalChat] Requested model ${ollamaModel} not found, falling back to ${modelNames[0]}`);
-        ollamaModel = modelNames[0];
-      } else {
-        // No models at all - try to pull the requested one
-        log(`[LocalChat] No models available, pulling ${model}...`);
-        if (mainWindow) {
-          mainWindow.webContents.send('local-chat-token', `Downloading AI model (${model})... Please wait.\n\n`);
-        }
-        try {
-          await pullModel(model);
-        } catch (pullErr) {
-          throw new Error(`AI model "${model}" is not available and could not be downloaded. Please check your internet connection.`);
-        }
-      }
-    }
+    const ollamaModel = await resolveOllamaModel(model);
     
     const temperature = options.temperature ?? 0.7;
     const systemPrompt = options.systemPrompt || 'You are a helpful, knowledgeable AI assistant. Respond naturally and conversationally. Be thorough but concise. Use markdown formatting when it helps readability (headings, lists, code blocks, bold/italic). If you are unsure about something, say so honestly rather than making things up.';
@@ -2490,6 +2503,8 @@ ipcMain.handle('local-chat-stream', async (event, message, model, conversationHi
     });
     
     if (!response.ok) {
+      const errBody = await response.text().catch(() => '');
+      log(`[LocalChat] Ollama stream error ${response.status}: ${errBody}`);
       throw new Error(`Ollama error: ${response.statusText}`);
     }
     
@@ -4324,6 +4339,7 @@ ipcMain.handle('image-assistant-chat', async (event, message, conversationHistor
   
   try {
     await ensureOllamaRunning();
+    const assistantModel = await resolveOllamaModel('mistral');
     
     const systemPrompt = `You are an expert image generation assistant. The user wants to create an image using Stable Diffusion. Your job is to understand what they want and configure the optimal settings.
 
@@ -4367,7 +4383,7 @@ What art style are you going for - photorealistic, oil painting, digital art, or
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'mistral:7b',
+        model: assistantModel,
         messages: messages,
         stream: false,
         options: { temperature: 0.7, num_ctx: 4096 }
@@ -4375,6 +4391,8 @@ What art style are you going for - photorealistic, oil painting, digital art, or
     });
     
     if (!response.ok) {
+      const errBody = await response.text().catch(() => '');
+      log(`[ImageAssistant] Ollama error ${response.status}: ${errBody}`);
       throw new Error(`Ollama error: ${response.statusText}`);
     }
     
@@ -4416,6 +4434,7 @@ ipcMain.handle('enhance-field', async (event, fieldName, currentValue, context =
   
   try {
     await ensureOllamaRunning();
+    const enhanceModel = await resolveOllamaModel('mistral');
     
     let systemPrompt = '';
     
@@ -4436,7 +4455,7 @@ The main image prompt is: ${context.prompt || 'general image'}`;
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'mistral:7b',
+        model: enhanceModel,
         messages: messages,
         stream: false,
         options: { temperature: 0.8, num_ctx: 2048 }
@@ -4444,6 +4463,8 @@ The main image prompt is: ${context.prompt || 'general image'}`;
     });
     
     if (!response.ok) {
+      const errBody = await response.text().catch(() => '');
+      log(`[EnhanceField] Ollama error ${response.status}: ${errBody}`);
       throw new Error(`Ollama error: ${response.statusText}`);
     }
     

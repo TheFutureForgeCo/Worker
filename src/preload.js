@@ -59,6 +59,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Maximum Privacy Mode & Local Chat
   setMaxPrivacyMode: (enabled) => ipcRenderer.invoke('set-max-privacy-mode', enabled),
   getMaxPrivacyMode: () => ipcRenderer.invoke('get-max-privacy-mode'),
+  getLogPath: () => ipcRenderer.invoke('get-log-path'),
   
   // Local chat (direct Ollama communication)
   localChatSend: (message, model, conversationHistory) => ipcRenderer.invoke('local-chat-send', message, model, conversationHistory),
