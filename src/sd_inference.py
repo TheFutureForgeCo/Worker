@@ -25,7 +25,9 @@ import json
 import time
 import base64
 import torch
+import numpy as np
 from io import BytesIO
+from PIL import Image
 
 def log(message):
     """Log to stderr for the Electron app to capture"""
@@ -85,6 +87,102 @@ def verify_provider_in_use(pipe, expected_provider):
         log(f"Provider verification error: {e}")
         return None
 
+def generate_tiled(pipe, prompt, negative_prompt, width, height, num_steps, guidance_scale, seed, use_sdxl):
+    """Generate a large image by splitting into overlapping tiles and stitching together.
+    Used as a fallback when the full image is too large for GPU VRAM."""
+    tile_size = 512
+    overlap = 64
+
+    log(f"TILED GENERATION: {width}x{height} with {tile_size}x{tile_size} tiles, {overlap}px overlap")
+
+    cols = max(1, int(np.ceil((width - overlap) / (tile_size - overlap))))
+    rows = max(1, int(np.ceil((height - overlap) / (tile_size - overlap))))
+    total_tiles = cols * rows
+    log(f"Tile grid: {cols}x{rows} = {total_tiles} tiles")
+
+    final_image = Image.new('RGB', (width, height))
+    blend_mask_h = None
+    blend_mask_v = None
+
+    for row in range(rows):
+        for col in range(cols):
+            tile_num = row * cols + col + 1
+            log(f"Generating tile {tile_num}/{total_tiles} [{col},{row}]...")
+
+            x_start = col * (tile_size - overlap)
+            y_start = row * (tile_size - overlap)
+
+            tile_w = min(tile_size, width - x_start)
+            tile_h = min(tile_size, height - y_start)
+            tile_w = ((tile_w + 7) // 8) * 8
+            tile_h = ((tile_h + 7) // 8) * 8
+
+            tile_seed = seed + row * cols + col
+            gen = torch.Generator()
+            gen.manual_seed(tile_seed)
+
+            region_hint = f", seamless tile region {col+1}/{cols} horizontal {row+1}/{rows} vertical"
+            tile_prompt = prompt + region_hint
+
+            try:
+                result = pipe(
+                    tile_prompt,
+                    negative_prompt=negative_prompt,
+                    width=tile_w,
+                    height=tile_h,
+                    num_inference_steps=num_steps,
+                    guidance_scale=guidance_scale,
+                    generator=gen,
+                )
+            except TypeError:
+                result = pipe(
+                    tile_prompt,
+                    negative_prompt=negative_prompt,
+                    width=tile_w,
+                    height=tile_h,
+                    num_inference_steps=num_steps,
+                    guidance_scale=guidance_scale,
+                )
+
+            tile_img = result.images[0]
+            log(f"Tile {tile_num} generated: {tile_img.size}")
+
+            if col == 0 and row == 0:
+                final_image.paste(tile_img, (x_start, y_start))
+            else:
+                tile_arr = np.array(tile_img).astype(np.float32)
+
+                x_end = x_start + tile_w
+                y_end = y_start + tile_h
+                x_end = min(x_end, width)
+                y_end = min(y_end, height)
+                paste_w = x_end - x_start
+                paste_h = y_end - y_start
+
+                existing_region = np.array(final_image.crop((x_start, y_start, x_end, y_end))).astype(np.float32)
+                tile_cropped = tile_arr[:paste_h, :paste_w]
+
+                alpha = np.ones((paste_h, paste_w, 1), dtype=np.float32)
+
+                if col > 0 and overlap > 0:
+                    blend_width = min(overlap, paste_w)
+                    for i in range(blend_width):
+                        alpha[:, i, 0] = i / blend_width
+
+                if row > 0 and overlap > 0:
+                    blend_height = min(overlap, paste_h)
+                    for i in range(blend_height):
+                        alpha[i, :, 0] *= i / blend_height
+
+                blended = (tile_cropped * alpha + existing_region * (1.0 - alpha)).astype(np.uint8)
+                final_image.paste(Image.fromarray(blended), (x_start, y_start))
+
+            log(f"Tile {tile_num} placed at ({x_start},{y_start})")
+
+    log("Tiled generation complete - all tiles stitched")
+    return final_image
+
+
 def main():
     if len(sys.argv) < 2:
         print(json.dumps({"error": "No input provided", "success": False}))
@@ -139,7 +237,6 @@ def main():
         log("-" * 40)
         log("STEP 2: Loading ONNX Runtime")
         log("-" * 40)
-        import numpy as np
         import onnxruntime as ort
         
         providers = ort.get_available_providers()
@@ -343,30 +440,54 @@ def main():
         gen_start = time.time()
         log("Starting inference...")
         
-        # Some ONNX pipelines don't support generator parameter
-        # Try with generator first, fall back without
-        try:
-            result = pipe(
-                prompt,
-                negative_prompt=negative_prompt,
-                width=width,
-                height=height,
-                num_inference_steps=num_steps,
-                guidance_scale=guidance_scale,
-                generator=generator,
-            )
-        except TypeError as e:
-            log(f"Generator parameter not supported, running without it: {e}")
-            result = pipe(
-                prompt,
-                negative_prompt=negative_prompt,
-                width=width,
-                height=height,
-                num_inference_steps=num_steps,
-                guidance_scale=guidance_scale,
-            )
+        used_tiling = False
         
-        image = result.images[0]
+        try:
+            try:
+                result = pipe(
+                    prompt,
+                    negative_prompt=negative_prompt,
+                    width=width,
+                    height=height,
+                    num_inference_steps=num_steps,
+                    guidance_scale=guidance_scale,
+                    generator=generator,
+                )
+            except TypeError as e:
+                log(f"Generator parameter not supported, running without it: {e}")
+                result = pipe(
+                    prompt,
+                    negative_prompt=negative_prompt,
+                    width=width,
+                    height=height,
+                    num_inference_steps=num_steps,
+                    guidance_scale=guidance_scale,
+                )
+            image = result.images[0]
+        except Exception as oom_err:
+            err_str = str(oom_err).lower()
+            err_type = type(oom_err).__name__
+            is_oom = ("out of memory" in err_str or
+                      "outofmemory" in err_type.lower() or
+                      "cuda out of memory" in err_str or
+                      "failed to allocat" in err_str or
+                      "memory allocation" in err_str or
+                      "insufficient memory" in err_str)
+            
+            if is_oom and (width > 512 or height > 512):
+                log(f"Full image generation failed: {oom_err}")
+                log("Falling back to tiled generation...")
+                
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                
+                image = generate_tiled(
+                    pipe, prompt, negative_prompt,
+                    width, height, num_steps, guidance_scale, seed, use_sdxl
+                )
+                used_tiling = True
+            else:
+                raise
         
         # Validate image is not blank (all black or all white)
         img_array = np.array(image)
@@ -388,7 +509,10 @@ def main():
         log(f"Generation time: {gen_time:.2f}s")
         log(f"Pipeline load time: {pipeline_load_time:.2f}s")
         log(f"Total time: {total_time:.2f}s")
-        log(f"Time per step: {gen_time / num_steps:.3f}s")
+        if not used_tiling:
+            log(f"Time per step: {gen_time / num_steps:.3f}s")
+        else:
+            log(f"Used tiled generation (local stitching)")
         log(f"Provider used: {provider}")
         
         # Performance analysis
@@ -429,6 +553,7 @@ def main():
             "provider": provider,
             "provider_verified": provider_verified,
             "nsfw_filter_disabled": nsfw_filter_disabled,
+            "used_tiling": used_tiling,
             "image_stats": {
                 "min": int(img_min),
                 "max": int(img_max),

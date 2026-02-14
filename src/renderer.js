@@ -2025,9 +2025,11 @@ async function sendChatMessage() {
       removeThinkingIndicator();
       
       if (result.success) {
-        chatHistory.push({ role: 'assistant', content: 'Here\'s your generated image:', image: result.path });
+        const tilingNote = result.usedTiling ? ' (tiled generation)' : '';
+        chatHistory.push({ role: 'assistant', content: `Here's your generated image${tilingNote}:`, image: result.path });
+        resetImageSettingsToDefaults();
       } else {
-        chatHistory.push({ role: 'assistant', content: `Failed to generate image: ${result.error}` });
+        chatHistory.push({ role: 'assistant', content: `Failed to generate image: ${parseImageError(result.error)}` });
       }
     } else if (localProcessingMode) {
       // Local Processing Mode: Use local Ollama
@@ -2299,63 +2301,93 @@ function getCurrentImageSettings() {
 function applyImageSettings(settings) {
   if (!settings) return;
   
+  const applied = [];
+  
+  // Normalize keys: accept both snake_case and camelCase
+  const s = {};
+  for (const [k, v] of Object.entries(settings)) {
+    s[k] = v;
+    if (k === 'guidance_scale') s.guidanceScale = v;
+    if (k === 'guidanceScale') s.guidance_scale = v;
+    if (k === 'negative_prompt') s.negativePrompt = v;
+    if (k === 'negativePrompt') s.negative_prompt = v;
+    if (k === 'aspect_ratio') s.aspectRatio = v;
+    if (k === 'aspectRatio') s.aspect_ratio = v;
+    if (k === 'num_steps') s.steps = v;
+    if (k === 'inference_steps') s.steps = v;
+  }
+  
   // Apply quality FIRST so that steps/guidance limits are correct
-  if (settings.quality && (settings.quality === 'standard' || settings.quality === 'high')) {
-    updateQualitySelection(settings.quality);
+  if (s.quality && (s.quality === 'standard' || s.quality === 'high')) {
+    updateQualitySelection(s.quality);
+    applied.push(`Quality: ${s.quality}`);
   }
   
   // Apply prompt
-  if (settings.prompt && chatInput) {
-    chatInput.value = settings.prompt;
+  if (s.prompt && chatInput) {
+    chatInput.value = s.prompt;
     chatInput.style.height = 'auto';
     chatInput.style.height = chatInput.scrollHeight + 'px';
+    applied.push('Prompt');
   }
   
   // Apply negative prompt
-  if (settings.negative_prompt) {
+  const negVal = s.negative_prompt || s.negativePrompt;
+  if (negVal) {
     const negEl = document.getElementById('imgNegativePrompt');
-    if (negEl) negEl.value = settings.negative_prompt;
+    if (negEl) {
+      negEl.value = negVal;
+      applied.push('Negative prompt');
+    }
   }
   
   // Apply steps - use the currently active quality (may have just changed above)
-  if (settings.steps) {
+  if (s.steps != null) {
     const stepsEl = document.getElementById('imgSteps');
     const stepsValEl = document.getElementById('imgStepsValue');
     if (stepsEl) {
       const isHigh = imageQuality === 'high';
       const minSteps = isHigh ? 1 : 5;
       const maxSteps = isHigh ? 4 : 50;
-      const val = Math.min(Math.max(parseInt(settings.steps), minSteps), maxSteps);
+      const val = Math.min(Math.max(parseInt(s.steps), minSteps), maxSteps);
       stepsEl.value = val;
       if (stepsValEl) stepsValEl.textContent = val;
+      applied.push(`Steps: ${val}`);
     }
   }
   
   // Apply guidance (SDXL-Turbo must stay at 0)
-  if (settings.guidance_scale != null) {
+  const guidanceVal = s.guidance_scale != null ? s.guidance_scale : s.guidanceScale;
+  if (guidanceVal != null) {
     const guidanceEl = document.getElementById('imgGuidance');
     const guidanceValEl = document.getElementById('imgGuidanceValue');
     if (guidanceEl && !guidanceEl.disabled) {
-      guidanceEl.value = settings.guidance_scale;
-      if (guidanceValEl) guidanceValEl.textContent = parseFloat(settings.guidance_scale).toFixed(1);
+      guidanceEl.value = guidanceVal;
+      if (guidanceValEl) guidanceValEl.textContent = parseFloat(guidanceVal).toFixed(1);
+      applied.push(`Guidance: ${parseFloat(guidanceVal).toFixed(1)}`);
     }
   }
   
   // Apply aspect ratio
-  if (settings.aspect_ratio) {
+  const aspectVal = s.aspect_ratio || s.aspectRatio;
+  if (aspectVal) {
     const aspectEl = document.getElementById('imgAspectRatio');
     if (aspectEl) {
       const validRatios = ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3'];
-      if (validRatios.includes(settings.aspect_ratio)) {
-        aspectEl.value = settings.aspect_ratio;
+      if (validRatios.includes(aspectVal)) {
+        aspectEl.value = aspectVal;
+        applied.push(`Aspect ratio: ${aspectVal}`);
       }
     }
   }
   
   // Apply seed
-  if (settings.seed != null) {
+  if (s.seed != null && s.seed !== '') {
     const seedEl = document.getElementById('imgSeed');
-    if (seedEl) seedEl.value = settings.seed;
+    if (seedEl) {
+      seedEl.value = s.seed;
+      applied.push(`Seed: ${s.seed}`);
+    }
   }
   
   // Open advanced panel so user can see the configured settings
@@ -2366,8 +2398,62 @@ function applyImageSettings(settings) {
     if (advToggle) advToggle.classList.add('active');
   }
   
-  // Show a system message confirming settings were applied
-  addAssistantMessage('system', 'Settings applied! Review them below and hit Send to generate.');
+  // Show a system message confirming which settings were applied
+  const summary = applied.length > 0 
+    ? `Settings applied: ${applied.join(', ')}. Review them below and hit Send to generate.`
+    : 'Settings applied! Review them below and hit Send to generate.';
+  addAssistantMessage('system', summary);
+}
+
+function resetImageSettingsToDefaults() {
+  const negEl = document.getElementById('imgNegativePrompt');
+  const stepsEl = document.getElementById('imgSteps');
+  const stepsValEl = document.getElementById('imgStepsValue');
+  const guidanceEl = document.getElementById('imgGuidance');
+  const guidanceValEl = document.getElementById('imgGuidanceValue');
+  const aspectEl = document.getElementById('imgAspectRatio');
+  const seedEl = document.getElementById('imgSeed');
+  
+  if (negEl) negEl.value = '';
+  if (seedEl) seedEl.value = '';
+  if (aspectEl) aspectEl.value = '1:1';
+  
+  if (imageQuality === 'high') {
+    if (stepsEl) stepsEl.value = 4;
+    if (stepsValEl) stepsValEl.textContent = '4';
+    if (guidanceEl) guidanceEl.value = 0;
+    if (guidanceValEl) guidanceValEl.textContent = '0.0';
+  } else {
+    if (stepsEl) stepsEl.value = 20;
+    if (stepsValEl) stepsValEl.textContent = '20';
+    if (guidanceEl) guidanceEl.value = 7.5;
+    if (guidanceValEl) guidanceValEl.textContent = '7.5';
+  }
+}
+
+function parseImageError(rawError) {
+  if (!rawError) return 'Unknown error';
+  const err = String(rawError);
+  if (err.includes('out of memory') || err.includes('OOM') || err.includes('CUDA out of memory')) {
+    return 'GPU ran out of memory. Try a smaller image size or fewer steps.';
+  }
+  if (err.includes('ENOENT') || err.includes('No such file')) {
+    return 'Image generation script not found. Try reinstalling the app.';
+  }
+  if (err.includes('model') && err.includes('not found')) {
+    return 'AI model not downloaded yet. Go to Settings and run the benchmark first.';
+  }
+  if (err.includes('timeout') || err.includes('timed out')) {
+    return 'Generation timed out. Try fewer steps or a simpler prompt.';
+  }
+  if (err.includes('Python') && err.includes('not found')) {
+    return 'Python environment not set up. Try reinstalling the app.';
+  }
+  if (err.includes('onnxruntime') || err.includes('ort')) {
+    return 'ONNX Runtime error. Try restarting the app or switching to CPU mode.';
+  }
+  const cleanErr = err.replace(/^Error:\s*/i, '').replace(/\n[\s\S]*/m, '').trim();
+  return cleanErr.length > 200 ? cleanErr.substring(0, 200) + '...' : cleanErr;
 }
 
 async function sendAssistantMessage() {

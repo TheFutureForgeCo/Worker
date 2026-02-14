@@ -4379,16 +4379,29 @@ What art style are you going for - photorealistic, oil painting, digital art, or
     }
     messages.push({ role: 'user', content: message });
     
-    const response = await fetch(`${OLLAMA_HOST}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: assistantModel,
-        messages: messages,
-        stream: false,
-        options: { temperature: 0.7, num_ctx: 4096 }
-      })
-    });
+    const assistantAbort = new AbortController();
+    const assistantTimeout = setTimeout(() => assistantAbort.abort(), 120000);
+    let response;
+    try {
+      response = await fetch(`${OLLAMA_HOST}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: assistantModel,
+          messages: messages,
+          stream: false,
+          options: { temperature: 0.7, num_ctx: 4096 }
+        }),
+        signal: assistantAbort.signal
+      });
+    } catch (fetchErr) {
+      if (fetchErr.name === 'AbortError') {
+        throw new Error('AI assistant timed out after 120 seconds. Try a shorter or simpler request.');
+      }
+      throw fetchErr;
+    } finally {
+      clearTimeout(assistantTimeout);
+    }
     
     if (!response.ok) {
       const errBody = await response.text().catch(() => '');
@@ -4451,16 +4464,29 @@ The main image prompt is: ${context.prompt || 'general image'}`;
       { role: 'user', content: currentValue || (fieldName === 'negative_prompt' ? 'Generate a good negative prompt for this image' : 'A beautiful scene') }
     ];
     
-    const response = await fetch(`${OLLAMA_HOST}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: enhanceModel,
-        messages: messages,
-        stream: false,
-        options: { temperature: 0.8, num_ctx: 2048 }
-      })
-    });
+    const enhanceAbort = new AbortController();
+    const enhanceTimeout = setTimeout(() => enhanceAbort.abort(), 120000);
+    let response;
+    try {
+      response = await fetch(`${OLLAMA_HOST}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: enhanceModel,
+          messages: messages,
+          stream: false,
+          options: { temperature: 0.8, num_ctx: 2048 }
+        }),
+        signal: enhanceAbort.signal
+      });
+    } catch (fetchErr) {
+      if (fetchErr.name === 'AbortError') {
+        throw new Error('Enhancement timed out after 120 seconds. Try again or use a simpler prompt.');
+      }
+      throw fetchErr;
+    } finally {
+      clearTimeout(enhanceTimeout);
+    }
     
     if (!response.ok) {
       const errBody = await response.text().catch(() => '');
