@@ -534,53 +534,68 @@ def main():
         
         used_tiling = False
         
-        try:
+        sdxl_max_native = 512
+        needs_tiling = use_sdxl and (width > sdxl_max_native or height > sdxl_max_native)
+        
+        if needs_tiling:
+            log(f"SDXL-Turbo native resolution is {sdxl_max_native}x{sdxl_max_native}")
+            log(f"Requested {width}x{height} exceeds native size - using tiled generation")
+            image = generate_tiled(
+                pipe, prompt, negative_prompt,
+                width, height, num_steps, guidance_scale, seed, use_sdxl
+            )
+            used_tiling = True
+        else:
             try:
-                result = pipe(
-                    prompt,
-                    negative_prompt=negative_prompt,
-                    width=width,
-                    height=height,
-                    num_inference_steps=num_steps,
-                    guidance_scale=guidance_scale,
-                    generator=generator,
-                )
-            except TypeError as e:
-                log(f"Generator parameter not supported, running without it: {e}")
-                result = pipe(
-                    prompt,
-                    negative_prompt=negative_prompt,
-                    width=width,
-                    height=height,
-                    num_inference_steps=num_steps,
-                    guidance_scale=guidance_scale,
-                )
-            image = result.images[0]
-        except Exception as oom_err:
-            err_str = str(oom_err).lower()
-            err_type = type(oom_err).__name__
-            is_oom = ("out of memory" in err_str or
-                      "outofmemory" in err_type.lower() or
-                      "cuda out of memory" in err_str or
-                      "failed to allocat" in err_str or
-                      "memory allocation" in err_str or
-                      "insufficient memory" in err_str or
-                      "bad allocation" in err_str)
-            
-            if is_oom and (width > 512 or height > 512):
-                log(f"Full image generation failed: {oom_err}")
-                log("Falling back to tiled generation...")
+                try:
+                    result = pipe(
+                        prompt,
+                        negative_prompt=negative_prompt,
+                        width=width,
+                        height=height,
+                        num_inference_steps=num_steps,
+                        guidance_scale=guidance_scale,
+                        generator=generator,
+                    )
+                except TypeError as e:
+                    log(f"Generator parameter not supported, running without it: {e}")
+                    result = pipe(
+                        prompt,
+                        negative_prompt=negative_prompt,
+                        width=width,
+                        height=height,
+                        num_inference_steps=num_steps,
+                        guidance_scale=guidance_scale,
+                    )
+                image = result.images[0]
+            except Exception as oom_err:
+                err_str = str(oom_err).lower()
+                err_type = type(oom_err).__name__
+                is_oom = ("out of memory" in err_str or
+                          "outofmemory" in err_type.lower() or
+                          "cuda out of memory" in err_str or
+                          "failed to allocat" in err_str or
+                          "memory allocation" in err_str or
+                          "insufficient memory" in err_str or
+                          "bad allocation" in err_str or
+                          "runtime_exception" in err_str or
+                          "the parameter is incorrect" in err_str or
+                          "non-zero status code" in err_str)
                 
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                
-                image = generate_tiled(
-                    pipe, prompt, negative_prompt,
-                    width, height, num_steps, guidance_scale, seed, use_sdxl
-                )
-                used_tiling = True
-            else:
-                raise
+                if is_oom and (width > 512 or height > 512):
+                    log(f"Full image generation failed: {oom_err}")
+                    log("Falling back to tiled generation...")
+                    
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    
+                    image = generate_tiled(
+                        pipe, prompt, negative_prompt,
+                        width, height, num_steps, guidance_scale, seed, use_sdxl
+                    )
+                    used_tiling = True
+                else:
+                    raise
         
         # Validate image is not blank (all black or all white)
         img_array = np.array(image)

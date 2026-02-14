@@ -2452,6 +2452,9 @@ function parseImageError(rawError) {
   if (err.includes('Python') && err.includes('not found')) {
     return 'Python environment not set up. Try reinstalling the app.';
   }
+  if (err.includes('the parameter is incorrect') || err.includes('non-zero status code returned while running')) {
+    return 'GPU driver error during generation. The image size may be too large for your GPU. Try a smaller size.';
+  }
   if (err.includes('onnxruntime') || err.includes('ort')) {
     return 'ONNX Runtime error. Try restarting the app or switching to CPU mode.';
   }
