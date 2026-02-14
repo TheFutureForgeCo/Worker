@@ -540,10 +540,22 @@ def main():
         if needs_tiling:
             log(f"SDXL-Turbo native resolution is {sdxl_max_native}x{sdxl_max_native}")
             log(f"Requested {width}x{height} exceeds native size - using tiled generation")
-            image = generate_tiled(
-                pipe, prompt, negative_prompt,
-                width, height, num_steps, guidance_scale, seed, use_sdxl
-            )
+            
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            gc.collect()
+            
+            try:
+                image = generate_tiled(
+                    pipe, prompt, negative_prompt,
+                    width, height, num_steps, guidance_scale, seed, use_sdxl
+                )
+            except Exception as tile_err:
+                log(f"SDXL tiled generation failed: {tile_err}")
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                gc.collect()
+                raise
             used_tiling = True
         else:
             try:
