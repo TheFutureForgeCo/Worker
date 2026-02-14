@@ -583,31 +583,32 @@ async function setupOllama() {
 }
 
 // Generate AI response using Ollama with conversation history
-async function generateWithOllama(prompt, systemPrompt = '', conversationHistory = []) {
+// When taskId is provided, streams tokens to the server in real-time
+async function generateWithOllama(prompt, systemPrompt = '', conversationHistory = [], taskId = null) {
   if (!ollamaReady) {
     return simulateResponse(prompt);
   }
 
   try {
-    // Build messages array for chat endpoint
     const messages = [];
     
-    // Add system prompt if provided
     if (systemPrompt) {
       messages.push({ role: 'system', content: systemPrompt });
     }
     
-    // Add conversation history (already in {role, content} format)
     if (Array.isArray(conversationHistory) && conversationHistory.length > 0) {
       messages.push(...conversationHistory);
     }
     
-    // Add current user message
     messages.push({ role: 'user', content: prompt });
     
-    log(`Sending chat request with ${messages.length} messages (${conversationHistory.length} history)`);
+    const shouldStream = !!taskId;
+    log(`Sending chat request with ${messages.length} messages, stream=${shouldStream}`);
     
-    // Use /api/chat endpoint for conversation context
+    if (shouldStream) {
+      return await generateWithOllamaStreaming(messages, taskId);
+    }
+    
     const response = await makeRequest(`${OLLAMA_HOST}/api/chat`, {
       method: 'POST',
       timeout: 120000,
@@ -623,7 +624,6 @@ async function generateWithOllama(prompt, systemPrompt = '', conversationHistory
       }
     });
 
-    // /api/chat returns response in message.content
     if (response.status === 200 && response.data && response.data.message && response.data.message.content) {
       return response.data.message.content;
     }
@@ -632,6 +632,116 @@ async function generateWithOllama(prompt, systemPrompt = '', conversationHistory
   }
 
   return simulateResponse(prompt);
+}
+
+// Stream tokens from Ollama and send updates to the server
+function generateWithOllamaStreaming(messages, taskId) {
+  return new Promise((resolve, reject) => {
+    try {
+      const ollamaUrl = new URL(`${OLLAMA_HOST}/api/chat`);
+      const isHttps = ollamaUrl.protocol === 'https:';
+      const lib = isHttps ? https : http;
+      
+      const bodyData = JSON.stringify({
+        model: activeModel,
+        messages: messages,
+        stream: true,
+        options: {
+          temperature: 0.7,
+          top_p: 0.9,
+          num_predict: 1024
+        }
+      });
+
+      const reqOptions = {
+        hostname: ollamaUrl.hostname,
+        port: ollamaUrl.port || (isHttps ? 443 : 80),
+        path: ollamaUrl.pathname,
+        method: 'POST',
+        timeout: 120000,
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(bodyData)
+        }
+      };
+
+      let fullContent = '';
+      let tokenBuffer = '';
+      let lastSendTime = Date.now();
+      const SEND_INTERVAL = 300;
+
+      function sendStreamUpdate(token, done = false) {
+        if (!token && !done) return;
+        makeRequest(`${SERVER_URL}/api/worker/stream-update/${taskId}`, {
+          method: 'POST',
+          timeout: 5000,
+          body: { token, content: fullContent, done }
+        }).catch(err => {
+          log(`Stream update error: ${err.message}`);
+        });
+      }
+
+      const req = lib.request(reqOptions, (res) => {
+        let buffer = '';
+        
+        res.on('data', (chunk) => {
+          buffer += chunk.toString();
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const data = JSON.parse(line);
+              if (data.message?.content) {
+                fullContent += data.message.content;
+                tokenBuffer += data.message.content;
+                
+                const now = Date.now();
+                if (now - lastSendTime >= SEND_INTERVAL) {
+                  sendStreamUpdate(tokenBuffer);
+                  tokenBuffer = '';
+                  lastSendTime = now;
+                }
+              }
+              if (data.done) {
+                if (tokenBuffer) {
+                  sendStreamUpdate(tokenBuffer);
+                  tokenBuffer = '';
+                }
+                sendStreamUpdate('', true);
+              }
+            } catch (e) {
+              // Ignore partial JSON
+            }
+          }
+        });
+
+        res.on('end', () => {
+          if (tokenBuffer) {
+            sendStreamUpdate(tokenBuffer);
+          }
+          sendStreamUpdate('', true);
+          resolve(fullContent || simulateResponse(''));
+        });
+      });
+
+      req.on('error', (err) => {
+        log(`Ollama streaming error: ${err.message}`);
+        reject(err);
+      });
+
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Ollama streaming timeout'));
+      });
+
+      req.write(bodyData);
+      req.end();
+    } catch (err) {
+      reject(err);
+    }
+  });
 }
 
 // Simulate response when Ollama not available
@@ -1169,13 +1279,13 @@ async function processTask(task) {
       result = JSON.stringify(imageResult);
       tokens = 0; // Images don't have tokens
     }
-    // Handle chat/inference tasks
+    // Handle chat/inference tasks (stream tokens to server in real-time)
     else if (task.taskType === 'chat' || task.taskType === 'inference') {
       const prompt = taskData.userMessage || taskData.prompt || taskData.message || 'Hello';
       const systemPrompt = taskData.systemPrompt || '';
       const conversationHistory = taskData.conversationHistory || [];
       
-      result = await generateWithOllama(prompt, systemPrompt, conversationHistory);
+      result = await generateWithOllama(prompt, systemPrompt, conversationHistory, task.id);
       tokens = result.split(/\s+/).length * 1.3; // Rough token estimate
     } else {
       // Generic task processing

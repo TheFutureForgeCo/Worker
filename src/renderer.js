@@ -143,6 +143,7 @@ let chatHistory = [];
 let conversations = [];
 let currentConversationId = null;
 let isGeneratingChat = false;
+let serverStreamActive = false;
 let imageMode = false;
 let imageQuality = 'standard'; // 'standard' or 'high' (SDXL-Turbo)
 let chatTemperature = 0.7;
@@ -1547,6 +1548,16 @@ async function updatePrivacyModeUI() {
         onlineToggleBtn.title = '';
       }
     }
+    
+    // Force local processing mode when max privacy is enabled
+    if (maxPrivacyMode && !localProcessingMode) {
+      localProcessingMode = true;
+      if (localProcessingSwitch) localProcessingSwitch.classList.add('active');
+      if (localProcessingToggle) localProcessingToggle.classList.add('active');
+      if (chatPrivacyBadge) chatPrivacyBadge.style.display = 'flex';
+      if (chatModelSelect) chatModelSelect.style.display = 'block';
+      if (chatImageBtn) chatImageBtn.style.display = 'inline-flex';
+    }
   } catch (err) {
     console.error('Failed to update privacy mode UI:', err);
   }
@@ -2021,24 +2032,47 @@ async function sendChatMessage() {
     } else if (localProcessingMode) {
       // Local Processing Mode: Use local Ollama
       const conversationForOllama = chatHistory.slice(-10);
-      await window.electronAPI.localChatStream(message, model, conversationForOllama.slice(0, -1), {
+      const localResult = await window.electronAPI.localChatStream(message, model, conversationForOllama.slice(0, -1), {
         temperature: chatTemperature
       });
+      if (localResult && !localResult.success) {
+        removeThinkingIndicator();
+        const streamingEl = document.getElementById('chatStreaming');
+        if (streamingEl) streamingEl.remove();
+        let errorMsg = localResult.error || 'Unknown error';
+        if (errorMsg.includes('fetch') || errorMsg.includes('ECONNREFUSED')) {
+          errorMsg = 'Could not connect to local AI. Make sure Ollama is running and try again.';
+        }
+        chatHistory.push({ role: 'assistant', content: errorMsg });
+        renderChatMessages();
+      }
     } else {
-      // Server Mode: Use ComputeGrid network API
+      // Server Mode: Use ComputeGrid network API with streaming
+      // The main process sends local-chat-token events during streaming,
+      // which are handled by the global onLocalChatToken listener.
+      // Set up a flag so the token handler knows we're in server-stream mode.
+      serverStreamActive = true;
       try {
         const result = await window.electronAPI.serverChatSend(message, chatHistory.slice(-10));
+        serverStreamActive = false;
         removeThinkingIndicator();
         
         if (result.success) {
-          chatHistory.push({ role: 'assistant', content: result.content });
+          // If streaming already populated the last message, just update content
+          const lastMsg = chatHistory[chatHistory.length - 1];
+          if (lastMsg && lastMsg.role === 'assistant' && lastMsg._streaming) {
+            lastMsg.content = result.content;
+            delete lastMsg._streaming;
+          } else if (!lastMsg || lastMsg.role !== 'assistant') {
+            chatHistory.push({ role: 'assistant', content: result.content });
+          }
         } else {
-          // Fallback to local if server fails
           console.log('Server chat failed, falling back to local:', result.error);
           chatHistory.push({ role: 'assistant', content: `Server error: ${result.error}. Enable Local Processing for offline mode.` });
         }
         renderChatMessages();
       } catch (serverErr) {
+        serverStreamActive = false;
         removeThinkingIndicator();
         chatHistory.push({ role: 'assistant', content: `Network error. Enable Local Processing for offline mode.` });
         renderChatMessages();
@@ -2476,12 +2510,18 @@ if (window.electronAPI.onLocalChatToken) {
       streamingEl.removeAttribute('id');
     }
     
-    // Add to history
-    chatHistory.push({ role: 'assistant', content: streamingContent });
+    if (serverStreamActive) {
+      // For server mode streaming, mark as _streaming so the await handler knows not to re-add
+      chatHistory.push({ role: 'assistant', content: streamingContent, _streaming: true });
+    } else {
+      chatHistory.push({ role: 'assistant', content: streamingContent });
+    }
     streamingContent = '';
     
-    isGeneratingChat = false;
-    chatSendBtn.disabled = false;
+    if (!serverStreamActive) {
+      isGeneratingChat = false;
+      chatSendBtn.disabled = false;
+    }
     saveChatHistory();
   });
   

@@ -2601,7 +2601,7 @@ ipcMain.handle('server-chat-send', async (event, message, conversationHistory) =
       };
     }
     
-    // Call the ComputeGrid chat API (conversation history is managed server-side)
+    // Call the ComputeGrid chat API to create the task
     const response = await fetch(`${SERVER_URL}/api/chat/send`, {
       method: 'POST',
       headers: { 
@@ -2624,13 +2624,109 @@ ipcMain.handle('server-chat-send', async (event, message, conversationHistory) =
     }
     
     const data = await response.json();
-    log(`[ServerChat] Response received from server`);
+    const messageId = data.assistantMessage?.id;
     
-    // The server returns assistantMessage with content
-    return {
-      success: true,
-      content: data.assistantMessage?.content || 'No response received'
-    };
+    if (!messageId) {
+      return {
+        success: true,
+        content: data.assistantMessage?.content || 'No response received'
+      };
+    }
+    
+    // Try SSE streaming from the server
+    log(`[ServerChat] Connecting to stream for message: ${messageId}`);
+    try {
+      const streamResponse = await fetch(`${SERVER_URL}/api/chat/stream/${messageId}`, {
+        headers: { 
+          'Authorization': `Bearer ${config.apiKey}`,
+          'Accept': 'text/event-stream'
+        }
+      });
+      
+      if (!streamResponse.ok) {
+        throw new Error('Stream not available');
+      }
+      
+      const contentType = streamResponse.headers.get('content-type') || '';
+      
+      // If already completed, return as JSON
+      if (contentType.includes('application/json')) {
+        const result = await streamResponse.json();
+        return { success: true, content: result.content || 'No response received' };
+      }
+      
+      // SSE streaming - forward tokens to renderer
+      let fullContent = '';
+      const reader = streamResponse.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = line.slice(6).trim();
+          if (payload === '[DONE]') break;
+          
+          try {
+            const parsed = JSON.parse(payload);
+            if (parsed.content) {
+              const newTokens = parsed.content.slice(fullContent.length);
+              if (newTokens && mainWindow) {
+                mainWindow.webContents.send('local-chat-token', newTokens);
+              }
+              fullContent = parsed.content;
+            }
+            if (parsed.done) {
+              if (mainWindow) {
+                mainWindow.webContents.send('local-chat-complete', fullContent);
+              }
+              return { success: true, content: fullContent };
+            }
+          } catch (e) {
+            // Skip parse errors
+          }
+        }
+      }
+      
+      if (fullContent) {
+        if (mainWindow) {
+          mainWindow.webContents.send('local-chat-complete', fullContent);
+        }
+        return { success: true, content: fullContent };
+      }
+    } catch (streamErr) {
+      log(`[ServerChat] Stream failed, falling back to polling: ${streamErr.message}`);
+    }
+    
+    // Fallback: Poll for completion (old behavior)
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      try {
+        const checkResponse = await fetch(`${SERVER_URL}/api/chat/stream/${messageId}`, {
+          headers: { 'Authorization': `Bearer ${config.apiKey}` }
+        });
+        if (checkResponse.ok) {
+          const ct = checkResponse.headers.get('content-type') || '';
+          if (ct.includes('application/json')) {
+            const result = await checkResponse.json();
+            if (result.done && result.content) {
+              return { success: true, content: result.content };
+            }
+          }
+        }
+      } catch (e) {
+        // Continue polling
+      }
+    }
+    
+    return { success: false, error: 'Response timed out after 2 minutes' };
   } catch (err) {
     log(`[ServerChat] Error: ${err.message}`);
     return {
