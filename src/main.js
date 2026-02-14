@@ -815,6 +815,34 @@ async function checkOllamaRunning() {
   });
 }
 
+// Ensure Ollama is running, start it if not (used by local chat)
+async function ensureOllamaRunning() {
+  const running = await checkOllamaRunning();
+  if (running) return true;
+  
+  log('[ensureOllama] Ollama not running, attempting to start...');
+  
+  const installed = await checkOllama();
+  if (!installed) {
+    log('[ensureOllama] Ollama not installed');
+    throw new Error('Ollama is not installed. Please restart the app to set up AI.');
+  }
+  
+  await startOllamaService();
+  
+  // Wait and verify with retries
+  for (let i = 0; i < 10; i++) {
+    await new Promise(r => setTimeout(r, 1000));
+    const nowRunning = await checkOllamaRunning();
+    if (nowRunning) {
+      log('[ensureOllama] Ollama started successfully');
+      return true;
+    }
+  }
+  
+  throw new Error('Could not start Ollama. Please restart the app.');
+}
+
 // Start Ollama service (using local binary if available)
 async function startOllamaService() {
   const localBinary = getOllamaBinaryPath();
@@ -2307,6 +2335,9 @@ ipcMain.handle('local-chat-send', async (event, message, model, conversationHist
   log(`[LocalChat] Sending message to ${model}: ${message.substring(0, 50)}...`);
   
   try {
+    // Ensure Ollama is running before attempting chat
+    await ensureOllamaRunning();
+    
     // Map friendly model names to actual Ollama model names
     const modelMap = {
       'mistral': 'mistral:7b',
@@ -2358,6 +2389,9 @@ ipcMain.handle('local-chat-stream', async (event, message, model, conversationHi
   log(`[LocalChat] Starting stream to ${model}: ${message.substring(0, 50)}...`);
   
   try {
+    // Ensure Ollama is running before attempting chat
+    await ensureOllamaRunning();
+    
     const modelMap = {
       'mistral': 'mistral:7b',
       'tinyllama': 'tinyllama:1.1b'
@@ -2430,10 +2464,16 @@ ipcMain.handle('local-chat-stream', async (event, message, model, conversationHi
     return { success: true, content: fullContent };
   } catch (err) {
     log(`[LocalChat] Stream error: ${err.message}`);
-    if (mainWindow) {
-      mainWindow.webContents.send('local-chat-error', err.message);
+    let userError = err.message;
+    if (err.message.includes('fetch') || err.message.includes('ECONNREFUSED')) {
+      userError = 'Could not connect to local AI engine. Ollama may not be running. Please restart the app.';
+    } else if (err.message.includes('not installed')) {
+      userError = err.message;
     }
-    return { success: false, error: err.message };
+    if (mainWindow) {
+      mainWindow.webContents.send('local-chat-error', userError);
+    }
+    return { success: false, error: userError };
   }
 });
 
@@ -4221,6 +4261,8 @@ ipcMain.handle('image-assistant-chat', async (event, message, conversationHistor
   log(`[ImageAssistant] User: ${message.substring(0, 80)}...`);
   
   try {
+    await ensureOllamaRunning();
+    
     const systemPrompt = `You are an expert image generation assistant. The user wants to create an image using Stable Diffusion. Your job is to understand what they want and configure the optimal settings.
 
 Available settings you can configure:
@@ -4311,6 +4353,8 @@ ipcMain.handle('enhance-field', async (event, fieldName, currentValue, context =
   log(`[EnhanceField] Enhancing ${fieldName}: ${(currentValue || '').substring(0, 50)}...`);
   
   try {
+    await ensureOllamaRunning();
+    
     let systemPrompt = '';
     
     if (fieldName === 'prompt') {
