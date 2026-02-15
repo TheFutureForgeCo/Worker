@@ -227,6 +227,545 @@ let deviceId = null; // Unique device identifier for per-device tracking
 const WATCHDOG_TIMEOUT_MS = 60000; // 60 seconds without activity = unresponsive
 const WATCHDOG_CHECK_INTERVAL_MS = 15000; // Check every 15 seconds
 
+// ============== RESOURCE MONITORING ==============
+let resourceMonitor = {
+  cpu: { usagePercent: 0, cores: 0 },
+  memory: { usagePercent: 0, totalGb: 0, usedGb: 0 },
+  gpu: null,
+  systemLoad: 0,
+  lastUpdate: Date.now()
+};
+let resourceMonitorInterval = null;
+
+// Multi-vendor GPU monitoring
+let gpuMonitorProvider = null; // 'nvidia-smi', 'rocm-smi', 'xpu-smi', 'none'
+let cachedGpuToolPath = null;
+let gpuToolChecked = false;
+
+let previousCpuTimes = null;
+
+function getCpuUsagePercent() {
+  const cpus = os.cpus();
+  let totalIdle = 0;
+  let totalTick = 0;
+  for (const cpu of cpus) {
+    for (const type in cpu.times) {
+      totalTick += cpu.times[type];
+    }
+    totalIdle += cpu.times.idle;
+  }
+  if (previousCpuTimes) {
+    const idleDelta = totalIdle - previousCpuTimes.idle;
+    const totalDelta = totalTick - previousCpuTimes.total;
+    previousCpuTimes = { idle: totalIdle, total: totalTick };
+    if (totalDelta === 0) return 0;
+    return Math.round((1 - idleDelta / totalDelta) * 100);
+  }
+  previousCpuTimes = { idle: totalIdle, total: totalTick };
+  return 0;
+}
+
+// Detect which GPU monitoring tool is available
+function detectGpuMonitorTool() {
+  return new Promise((resolve) => {
+    if (gpuToolChecked) {
+      resolve(gpuMonitorProvider);
+      return;
+    }
+    
+    // Tools to try in order of preference
+    const tools = [];
+    
+    if (process.platform === 'win32') {
+      tools.push(
+        { name: 'nvidia-smi', paths: ['C:\\Program Files\\NVIDIA Corporation\\NVSMI\\nvidia-smi.exe', 'nvidia-smi'], testCmd: (p) => `"${p}" --query-gpu=utilization.gpu --format=csv,noheader,nounits` },
+        { name: 'rocm-smi', paths: ['rocm-smi'], testCmd: (p) => `"${p}" --showuse --csv` }
+      );
+    } else {
+      tools.push(
+        { name: 'nvidia-smi', paths: ['nvidia-smi'], testCmd: (p) => `"${p}" --query-gpu=utilization.gpu --format=csv,noheader,nounits` },
+        { name: 'rocm-smi', paths: ['rocm-smi'], testCmd: (p) => `"${p}" --showuse --csv` },
+        { name: 'xpu-smi', paths: ['xpu-smi'], testCmd: (p) => `"${p}" discovery` }
+      );
+    }
+    
+    let toolIndex = 0;
+    
+    function tryNextTool() {
+      if (toolIndex >= tools.length) {
+        gpuMonitorProvider = 'none';
+        cachedGpuToolPath = null;
+        gpuToolChecked = true;
+        log('[ResourceMonitor] No GPU monitoring tool found - using name-based VRAM estimates');
+        resolve('none');
+        return;
+      }
+      
+      const tool = tools[toolIndex];
+      let pathIndex = 0;
+      
+      function tryNextPath() {
+        if (pathIndex >= tool.paths.length) {
+          toolIndex++;
+          tryNextTool();
+          return;
+        }
+        
+        const p = tool.paths[pathIndex];
+        exec(tool.testCmd(p), { timeout: 5000, windowsHide: true }, (err) => {
+          if (!err) {
+            gpuMonitorProvider = tool.name;
+            cachedGpuToolPath = p;
+            gpuToolChecked = true;
+            log('[ResourceMonitor] GPU monitoring tool detected: ' + tool.name + ' at ' + p);
+            resolve(tool.name);
+          } else {
+            pathIndex++;
+            tryNextPath();
+          }
+        });
+      }
+      
+      tryNextPath();
+    }
+    
+    tryNextTool();
+  });
+}
+
+// Query GPU stats from nvidia-smi
+function queryNvidiaSmi(toolPath) {
+  return new Promise((resolve) => {
+    exec(`"${toolPath}" --query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,name --format=csv,noheader,nounits`, { timeout: 5000, windowsHide: true }, (err, stdout) => {
+      if (err) { resolve(null); return; }
+      try {
+        const parts = stdout.trim().split(',').map(s => s.trim());
+        if (parts.length >= 5 && !isNaN(parseFloat(parts[0]))) {
+          resolve({
+            usagePercent: Math.round(parseFloat(parts[0])),
+            vramUsedMb: Math.round(parseFloat(parts[1])),
+            vramTotalMb: Math.round(parseFloat(parts[2])),
+            tempC: Math.round(parseFloat(parts[3])),
+            vendor: 'NVIDIA',
+            name: parts[4] || 'NVIDIA GPU'
+          });
+        } else { resolve(null); }
+      } catch (e) { resolve(null); }
+    });
+  });
+}
+
+// Query GPU stats from rocm-smi (AMD)
+function queryRocmSmi(toolPath) {
+  return new Promise((resolve) => {
+    // Get GPU usage
+    exec(`"${toolPath}" --showuse --showmeminfo vram --showtemp --csv`, { timeout: 5000, windowsHide: true }, (err, stdout) => {
+      if (err) { resolve(null); return; }
+      try {
+        const lines = stdout.trim().split('\n');
+        // rocm-smi CSV format varies, parse carefully
+        let gpuUsage = 0, vramUsed = 0, vramTotal = 0, temp = 0;
+        
+        for (const line of lines) {
+          const lower = line.toLowerCase();
+          if (lower.includes('gpu use') || lower.includes('gpu activity')) {
+            const match = line.match(/(\d+\.?\d*)%?/);
+            if (match) gpuUsage = Math.round(parseFloat(match[1]));
+          }
+          if (lower.includes('vram total')) {
+            const match = line.match(/(\d+)/);
+            if (match) vramTotal = parseInt(match[1]);
+          }
+          if (lower.includes('vram used')) {
+            const match = line.match(/(\d+)/);
+            if (match) vramUsed = parseInt(match[1]);
+          }
+          if (lower.includes('temperature') || lower.includes('temp')) {
+            const match = line.match(/(\d+\.?\d*)/);
+            if (match) temp = Math.round(parseFloat(match[1]));
+          }
+        }
+        
+        // If CSV parsing didn't work well, try alternative approach
+        if (vramTotal === 0) {
+          // Try simpler command for VRAM
+          exec(`"${toolPath}" --showmeminfo vram`, { timeout: 5000, windowsHide: true }, (err2, stdout2) => {
+            if (!err2) {
+              const totalMatch = stdout2.match(/Total[^:]*:\s*(\d+)/i);
+              const usedMatch = stdout2.match(/Used[^:]*:\s*(\d+)/i);
+              if (totalMatch) vramTotal = Math.round(parseInt(totalMatch[1]) / (1024 * 1024)); // bytes to MB
+              if (usedMatch) vramUsed = Math.round(parseInt(usedMatch[1]) / (1024 * 1024));
+            }
+            resolve({
+              usagePercent: gpuUsage,
+              vramUsedMb: vramUsed,
+              vramTotalMb: vramTotal,
+              tempC: temp,
+              vendor: 'AMD',
+              name: gpuInfo?.gpuName || 'AMD GPU'
+            });
+          });
+          return;
+        }
+        
+        resolve({
+          usagePercent: gpuUsage,
+          vramUsedMb: vramUsed,
+          vramTotalMb: vramTotal,
+          tempC: temp,
+          vendor: 'AMD',
+          name: gpuInfo?.gpuName || 'AMD GPU'
+        });
+      } catch (e) { resolve(null); }
+    });
+  });
+}
+
+// Query GPU stats from xpu-smi (Intel)
+function queryXpuSmi(toolPath) {
+  return new Promise((resolve) => {
+    exec(`"${toolPath}" stats -d 0`, { timeout: 5000, windowsHide: true }, (err, stdout) => {
+      if (err) { resolve(null); return; }
+      try {
+        let gpuUsage = 0, vramUsed = 0, vramTotal = 0, temp = 0;
+        const lines = stdout.trim().split('\n');
+        
+        for (const line of lines) {
+          const lower = line.toLowerCase();
+          if (lower.includes('gpu utilization')) {
+            const match = line.match(/(\d+\.?\d*)/);
+            if (match) gpuUsage = Math.round(parseFloat(match[1]));
+          }
+          if (lower.includes('gpu memory used')) {
+            const match = line.match(/(\d+\.?\d*)\s*(mb|mib)/i);
+            if (match) vramUsed = Math.round(parseFloat(match[1]));
+          }
+          if (lower.includes('gpu memory total') || lower.includes('device memory')) {
+            const match = line.match(/(\d+\.?\d*)\s*(mb|mib)/i);
+            if (match) vramTotal = Math.round(parseFloat(match[1]));
+          }
+          if (lower.includes('gpu temperature')) {
+            const match = line.match(/(\d+\.?\d*)/);
+            if (match) temp = Math.round(parseFloat(match[1]));
+          }
+        }
+        
+        resolve({
+          usagePercent: gpuUsage,
+          vramUsedMb: vramUsed,
+          vramTotalMb: vramTotal,
+          tempC: temp,
+          vendor: 'Intel',
+          name: gpuInfo?.gpuName || 'Intel GPU'
+        });
+      } catch (e) { resolve(null); }
+    });
+  });
+}
+
+// Build GPU stats from gpuInfo (name-based estimation fallback)
+function getGpuStatsFromInfo() {
+  if (!gpuInfo || !gpuInfo.hasGpu) return null;
+  
+  const vramGb = gpuInfo.gpuVramGb || 0;
+  const name = gpuInfo.gpuName || 'Unknown GPU';
+  const lower = name.toLowerCase();
+  let vendor = 'Unknown';
+  if (lower.includes('nvidia') || lower.includes('geforce') || lower.includes('rtx') || lower.includes('gtx')) vendor = 'NVIDIA';
+  else if (lower.includes('amd') || lower.includes('radeon') || lower.includes('rx ')) vendor = 'AMD';
+  else if (lower.includes('intel') || lower.includes('arc')) vendor = 'Intel';
+  
+  return {
+    usagePercent: 0,
+    vramUsedMb: 0,
+    vramTotalMb: Math.round(vramGb * 1024),
+    tempC: 0,
+    vendor: vendor,
+    name: name,
+    estimatedOnly: true
+  };
+}
+
+// Unified GPU stats query
+async function queryGpuStats() {
+  if (!gpuMonitorProvider || gpuMonitorProvider === 'none') {
+    return getGpuStatsFromInfo();
+  }
+  
+  let stats = null;
+  if (gpuMonitorProvider === 'nvidia-smi') {
+    stats = await queryNvidiaSmi(cachedGpuToolPath);
+  } else if (gpuMonitorProvider === 'rocm-smi') {
+    stats = await queryRocmSmi(cachedGpuToolPath);
+  } else if (gpuMonitorProvider === 'xpu-smi') {
+    stats = await queryXpuSmi(cachedGpuToolPath);
+  }
+  
+  if (!stats) {
+    return getGpuStatsFromInfo();
+  }
+  
+  return stats;
+}
+
+async function updateResourceMonitor() {
+  try {
+    const cpuUsage = getCpuUsagePercent();
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const usedMem = totalMem - freeMem;
+
+    resourceMonitor.cpu = {
+      usagePercent: cpuUsage,
+      cores: os.cpus().length
+    };
+    resourceMonitor.memory = {
+      usagePercent: Math.round((usedMem / totalMem) * 100),
+      totalGb: Math.round((totalMem / (1024 * 1024 * 1024)) * 10) / 10,
+      usedGb: Math.round((usedMem / (1024 * 1024 * 1024)) * 10) / 10
+    };
+
+    // Detect GPU monitor tool on first run
+    if (!gpuToolChecked) {
+      await detectGpuMonitorTool();
+    }
+    
+    const gpuStats = await queryGpuStats();
+    resourceMonitor.gpu = gpuStats;
+
+    if (resourceMonitor.gpu && !resourceMonitor.gpu.estimatedOnly) {
+      resourceMonitor.systemLoad = Math.max(cpuUsage, resourceMonitor.gpu.usagePercent);
+    } else {
+      resourceMonitor.systemLoad = cpuUsage;
+    }
+    
+    // Determine VRAM tier
+    resourceMonitor.vramTier = getVramTier();
+
+    resourceMonitor.lastUpdate = Date.now();
+    sendStatusToRenderer();
+  } catch (e) {
+    log('[ResourceMonitor] Error: ' + e.message);
+  }
+}
+
+// ============== VRAM TIER SYSTEM ==============
+// Tiers determine how aggressively we keep AI models loaded
+// tiny: <=4GB - Never pre-warm, use TinyLlama only
+// small: 5-6GB - Warm when idle, always unload for images, faster unload timeout
+// standard: 7-8GB - Default behavior, unload after 5min high load
+// large: 9-12GB - More tolerant, longer timeout before unload
+// huge: 13GB+ - Keep warm even during moderate load, try to keep during image gen
+// unknown: No VRAM info - Conservative, behave like 'small'
+
+function getVramTier() {
+  let vramMb = 0;
+  
+  // Try to get VRAM from live GPU stats first
+  if (resourceMonitor.gpu) {
+    vramMb = resourceMonitor.gpu.vramTotalMb || 0;
+  }
+  
+  // Fallback to gpuInfo detection
+  if (vramMb === 0 && gpuInfo && gpuInfo.gpuVramGb > 0) {
+    vramMb = gpuInfo.gpuVramGb * 1024;
+  }
+  
+  if (vramMb === 0) {
+    if (gpuInfo && gpuInfo.hasGpu) return 'unknown';
+    return 'none';
+  }
+  
+  const vramGb = vramMb / 1024;
+  
+  if (vramGb <= 4) return 'tiny';
+  if (vramGb <= 6) return 'small';
+  if (vramGb <= 8) return 'standard';
+  if (vramGb <= 12) return 'large';
+  return 'huge';
+}
+
+// Get the unload timeout for the current VRAM tier (in ms)
+function getUnloadTimeout() {
+  const tier = resourceMonitor.vramTier || 'standard';
+  switch (tier) {
+    case 'tiny': return 60000;     // 1 minute - very aggressive
+    case 'small': return 120000;   // 2 minutes
+    case 'unknown': return 120000; // 2 minutes - conservative
+    case 'standard': return 300000; // 5 minutes (current default)
+    case 'large': return 600000;   // 10 minutes
+    case 'huge': return 900000;    // 15 minutes
+    default: return 300000;
+  }
+}
+
+// Get the system load threshold for the current VRAM tier
+function getLoadThreshold() {
+  const tier = resourceMonitor.vramTier || 'standard';
+  switch (tier) {
+    case 'tiny': return 30;     // Unload at 30% load
+    case 'small': return 40;    // Unload at 40%
+    case 'unknown': return 40;  // Conservative
+    case 'standard': return 50; // Current default
+    case 'large': return 60;    // More tolerant
+    case 'huge': return 70;     // Very tolerant
+    default: return 50;
+  }
+}
+
+// Should we pre-warm the chat model for this tier?
+function shouldPreWarm() {
+  const tier = resourceMonitor.vramTier || 'standard';
+  return tier !== 'tiny' && tier !== 'none';
+}
+
+// Should we unload chat model before image generation?
+function shouldUnloadForImages() {
+  const tier = resourceMonitor.vramTier || 'standard';
+  return tier !== 'huge';
+}
+
+// ============== AI MODEL STATE & KEEP-ALIVE MANAGER ==============
+let aiModelState = {
+  chatModelStatus: 'unloaded',
+  imageAssistantStatus: 'unloaded',
+  lastChatActivity: 0,
+  lastIdleCheck: 0,
+  currentChatModel: null,
+  warmupInProgress: false
+};
+let highLoadSince = 0;
+let idleCheckInterval = null;
+
+async function warmChatModel() {
+  if (aiModelState.warmupInProgress) return;
+  aiModelState.warmupInProgress = true;
+  try {
+    const model = await resolveOllamaModel('mistral');
+    aiModelState.currentChatModel = model;
+    aiModelState.chatModelStatus = 'loading';
+    log('[KeepAlive] Warming chat model: ' + model);
+
+    const response = await fetch(`${OLLAMA_HOST}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: model,
+        messages: [{ role: 'system', content: 'warmup' }],
+        stream: false,
+        keep_alive: -1,
+        options: { num_predict: 1 }
+      })
+    });
+
+    if (response.ok) {
+      aiModelState.chatModelStatus = 'warm';
+      log('[KeepAlive] Chat model warmed successfully: ' + model);
+    } else {
+      aiModelState.chatModelStatus = 'unloaded';
+      log('[KeepAlive] Warmup request failed: ' + response.status);
+    }
+  } catch (e) {
+    aiModelState.chatModelStatus = 'unloaded';
+    log('[KeepAlive] Warmup error: ' + e.message);
+  } finally {
+    aiModelState.warmupInProgress = false;
+  }
+}
+
+async function unloadChatModel() {
+  try {
+    const model = aiModelState.currentChatModel;
+    if (!model) {
+      aiModelState.chatModelStatus = 'timed_out';
+      return;
+    }
+    log('[KeepAlive] Unloading chat model: ' + model);
+
+    await fetch(`${OLLAMA_HOST}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: model,
+        messages: [{ role: 'system', content: 'unload' }],
+        stream: false,
+        keep_alive: 0,
+        options: { num_predict: 1 }
+      })
+    });
+
+    aiModelState.chatModelStatus = 'timed_out';
+    log('[KeepAlive] Chat model unloaded: ' + model);
+  } catch (e) {
+    aiModelState.chatModelStatus = 'timed_out';
+    log('[KeepAlive] Unload error (non-critical): ' + e.message);
+  }
+}
+
+function runIdleCheck() {
+  aiModelState.lastIdleCheck = Date.now();
+  const loadThreshold = getLoadThreshold();
+  const unloadTimeout = getUnloadTimeout();
+
+  if (resourceMonitor.systemLoad > loadThreshold) {
+    if (highLoadSince === 0) {
+      highLoadSince = Date.now();
+    }
+  } else {
+    highLoadSince = 0;
+  }
+
+  if (aiModelState.chatModelStatus === 'warm' || aiModelState.chatModelStatus === 'active') {
+    if (highLoadSince > 0 && (Date.now() - highLoadSince > unloadTimeout)) {
+      const tier = resourceMonitor.vramTier || 'standard';
+      log('[KeepAlive] Unloading chat model - system usage above ' + loadThreshold + '% for ' + Math.round(unloadTimeout/60000) + 'min (VRAM tier: ' + tier + ')');
+      unloadChatModel();
+    }
+  }
+
+  if (aiModelState.chatModelStatus === 'timed_out') {
+    if (resourceMonitor.systemLoad < loadThreshold && shouldPreWarm()) {
+      const tier = resourceMonitor.vramTier || 'standard';
+      log('[KeepAlive] Re-warming chat model - system usage below ' + loadThreshold + '% (VRAM tier: ' + tier + ')');
+      warmChatModel();
+    }
+  }
+}
+
+async function prepareForImageGeneration() {
+  try {
+    if (shouldUnloadForImages()) {
+      if (aiModelState.chatModelStatus === 'warm' || aiModelState.chatModelStatus === 'active') {
+        await unloadChatModel();
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        log('[KeepAlive] Unloaded chat model to free VRAM for image generation (tier: ' + (resourceMonitor.vramTier || 'standard') + ')');
+      }
+    } else {
+      log('[KeepAlive] Keeping chat model warm during image generation (tier: ' + (resourceMonitor.vramTier || 'huge') + ')');
+    }
+  } catch (e) {
+    log('[KeepAlive] prepareForImageGeneration error (non-critical): ' + e.message);
+  }
+}
+
+async function afterImageGeneration() {
+  try {
+    const loadThreshold = getLoadThreshold();
+    if (resourceMonitor.systemLoad < loadThreshold && shouldPreWarm()) {
+      setTimeout(async () => {
+        try {
+          log('[KeepAlive] Re-warming chat model after image generation');
+          await warmChatModel();
+        } catch (e) {
+          log('[KeepAlive] afterImageGeneration warmup error: ' + e.message);
+        }
+      }, 2000);
+    }
+  } catch (e) {
+    log('[KeepAlive] afterImageGeneration error: ' + e.message);
+  }
+}
+
 // Generate or load device ID for per-device tracking
 function getOrCreateDeviceId() {
   const configPath = path.join(app.getPath('userData'), 'device-id');
@@ -778,7 +1317,13 @@ function sendStatusToRenderer() {
       imageBenchmarkTimeMs: config.imageBenchmarkTimeMs || null,
       sdxlBenchmarkTimeMs: config.sdxlBenchmarkTimeMs || null,
       imageQualityTier: config.imageQualityTier || 'none',
-      deviceId: deviceId
+      deviceId: deviceId,
+      resourceStats: resourceMonitor,
+      aiModelState: {
+        chatModelStatus: aiModelState.chatModelStatus,
+        imageAssistantStatus: aiModelState.imageAssistantStatus,
+        currentChatModel: aiModelState.currentChatModel
+      }
     });
   }
 }
@@ -1920,8 +2465,16 @@ ipcMain.handle('get-status', () => ({
   // Image AI status
   gpuInfo: gpuInfo || { hasGpu: false, gpuVramGb: 0, canGenerateImages: false },
   imageAiInstalled: config.imageAiInstalled || false,
-  imageAiEnabled: config.imageAiEnabled || false
+  imageAiEnabled: config.imageAiEnabled || false,
+  resourceStats: resourceMonitor,
+  aiModelState: {
+    chatModelStatus: aiModelState.chatModelStatus,
+    imageAssistantStatus: aiModelState.imageAssistantStatus,
+    currentChatModel: aiModelState.currentChatModel
+  }
 }));
+
+ipcMain.handle('get-resource-stats', () => resourceMonitor);
 
 ipcMain.handle('save-config', async (event, newConfig) => {
   log('Saving config...');
@@ -2438,7 +2991,8 @@ ipcMain.handle('local-chat-send', async (event, message, model, conversationHist
       body: JSON.stringify({
         model: ollamaModel,
         messages: messages,
-        stream: false
+        stream: false,
+        keep_alive: -1
       })
     });
     
@@ -2468,6 +3022,8 @@ ipcMain.handle('local-chat-send', async (event, message, model, conversationHist
 // Local chat stream - streaming Ollama communication
 ipcMain.handle('local-chat-stream', async (event, message, model, conversationHistory, options = {}) => {
   log(`[LocalChat] Starting stream to ${model}: ${message.substring(0, 50)}...`);
+  aiModelState.chatModelStatus = 'active';
+  aiModelState.lastChatActivity = Date.now();
   
   try {
     await ensureOllamaRunning();
@@ -2495,6 +3051,7 @@ ipcMain.handle('local-chat-stream', async (event, message, model, conversationHi
         model: ollamaModel,
         messages: messages,
         stream: true,
+        keep_alive: -1,
         options: {
           temperature: temperature,
           num_ctx: 4096
@@ -2538,9 +3095,11 @@ ipcMain.handle('local-chat-stream', async (event, message, model, conversationHi
       mainWindow.webContents.send('local-chat-complete', fullContent);
     }
     
+    aiModelState.chatModelStatus = 'warm';
     return { success: true, content: fullContent };
   } catch (err) {
     log(`[LocalChat] Stream error: ${err.message}`);
+    aiModelState.chatModelStatus = 'warm';
     let userError = err.message;
     if (err.message.includes('fetch') || err.message.includes('ECONNREFUSED')) {
       userError = 'Could not connect to local AI engine. Ollama may not be running. Please restart the app.';
@@ -2557,6 +3116,8 @@ ipcMain.handle('local-chat-stream', async (event, message, model, conversationHi
 // Local image generation - direct ONNX Runtime (no server)
 ipcMain.handle('local-image-generate', async (event, prompt, quality = 'standard', imageOptions = {}) => {
   log(`[LocalImage] Generating image for prompt: ${prompt.substring(0, 50)}... (quality: ${quality})`);
+  
+  await prepareForImageGeneration();
   
   try {
     const aiPaths = getAiPaths();
@@ -2686,9 +3247,11 @@ ipcMain.handle('local-image-generate', async (event, prompt, quality = 'standard
     }
     
     log(`[LocalImage] Image generated: ${result.path}`);
+    afterImageGeneration();
     return result;
   } catch (err) {
     log(`[LocalImage] Error: ${err.message}`);
+    afterImageGeneration();
     if (mainWindow) {
       mainWindow.webContents.send('local-image-error', err.message);
     }
@@ -4330,7 +4893,10 @@ async function generateImage(params) {
 }
 
 ipcMain.handle('generate-image', async (event, params) => {
-  return await generateImage(params);
+  await prepareForImageGeneration();
+  const result = await generateImage(params);
+  afterImageGeneration();
+  return result;
 });
 
 // Image Assistant - conversational AI that configures image generation settings
@@ -4391,6 +4957,7 @@ What art style are you going for - photorealistic, oil painting, digital art, or
           model: assistantModel,
           messages: messages,
           stream: false,
+          keep_alive: -1,
           options: { temperature: 0.7, num_ctx: 4096 }
         }),
         signal: assistantAbort.signal
@@ -4476,6 +5043,7 @@ The main image prompt is: ${context.prompt || 'general image'}`;
           model: enhanceModel,
           messages: messages,
           stream: false,
+          keep_alive: -1,
           options: { temperature: 0.8, num_ctx: 2048 }
         }),
         signal: enhanceAbort.signal
@@ -5143,10 +5711,35 @@ app.whenReady().then(async () => {
     }
   }, 3000); // Give window time to fully load
   
+  // Start resource monitoring (every 30 seconds)
+  updateResourceMonitor();
+  resourceMonitorInterval = setInterval(updateResourceMonitor, 30000);
+
+  // Start smart idle check (every 5 minutes)
+  idleCheckInterval = setInterval(runIdleCheck, 300000);
+
   // Auto-start worker if configured
   if (config.autoStart && config.apiKey) {
     log('Auto-starting worker...');
     setTimeout(() => startWorker(), 2000);
+  }
+
+  // Preload chat model if worker is configured
+  if (config.apiKey) {
+    setTimeout(async () => {
+      try {
+        const ollamaReady = await checkOllama();
+        if (ollamaReady && resourceMonitor.systemLoad < getLoadThreshold() && shouldPreWarm()) {
+          log('Preloading chat model on startup...');
+          await warmChatModel();
+          log('Chat model preloaded successfully');
+        } else {
+          log('Skipping model preload - system busy or Ollama not ready');
+        }
+      } catch (e) {
+        log('Model preload failed (non-critical): ' + e.message);
+      }
+    }, 10000);
   }
 });
 
@@ -5165,5 +5758,7 @@ app.on('activate', () => {
 });
 
 app.on('before-quit', () => {
+  if (resourceMonitorInterval) clearInterval(resourceMonitorInterval);
+  if (idleCheckInterval) clearInterval(idleCheckInterval);
   stopWorker();
 });

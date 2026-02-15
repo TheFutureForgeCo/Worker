@@ -329,6 +329,143 @@ function updateUI(status) {
   autoStartSwitch.classList.toggle('active', currentConfig.autoStart);
   startMinimizedSwitch.classList.toggle('active', currentConfig.startMinimized);
   minimizeToTraySwitch.classList.toggle('active', currentConfig.minimizeToTray);
+  
+  // Update resource monitor
+  if (status.resourceStats) {
+    updateResourceMonitor(status.resourceStats, status.aiModelState);
+  }
+}
+
+// Update resource monitor UI
+function updateResourceMonitor(stats, aiState) {
+  const cpuBarFill = document.getElementById('cpuBarFill');
+  const cpuValue = document.getElementById('cpuValue');
+  const gpuRow = document.getElementById('gpuRow');
+  const gpuBarFill = document.getElementById('gpuBarFill');
+  const gpuValue = document.getElementById('gpuValue');
+  const memBarFill = document.getElementById('memBarFill');
+  const memValue = document.getElementById('memValue');
+  const vramRow = document.getElementById('vramRow');
+  const vramBarFill = document.getElementById('vramBarFill');
+  const vramValue = document.getElementById('vramValue');
+  const aiModelBadge = document.getElementById('aiModelBadge');
+  
+  if (!cpuBarFill) return;
+  
+  // CPU
+  const cpuPct = Math.round(stats.cpu?.usagePercent || 0);
+  cpuBarFill.style.width = cpuPct + '%';
+  cpuBarFill.classList.toggle('high', cpuPct > 85);
+  cpuValue.textContent = cpuPct + '%';
+  
+  // Memory
+  const memPct = Math.round(stats.memory?.usagePercent || 0);
+  memBarFill.style.width = memPct + '%';
+  memBarFill.classList.toggle('high', memPct > 85);
+  const memUsedGb = (stats.memory?.usedGb || 0).toFixed(1);
+  const memTotalGb = (stats.memory?.totalGb || 0).toFixed(1);
+  memValue.textContent = memPct + '%';
+  memValue.title = memUsedGb + ' / ' + memTotalGb + ' GB';
+  
+  // GPU vendor info
+  const gpuVendorInfo = document.getElementById('gpuVendorInfo');
+  
+  // GPU (show if available - including estimated-only mode)
+  if (stats.gpu) {
+    const isEstimated = stats.gpu.estimatedOnly;
+    const vendor = stats.gpu.vendor || '';
+    const gpuName = stats.gpu.name || '';
+    
+    // Show vendor info line with GPU name and VRAM tier
+    if (gpuVendorInfo) {
+      const vramTotal = stats.gpu.vramTotalMb || 0;
+      let infoText = gpuName;
+      if (vramTotal > 0) {
+        const vramGb = (vramTotal / 1024).toFixed(0);
+        infoText += ' (' + vramGb + ' GB';
+        if (stats.vramTier && stats.vramTier !== 'none') {
+          const tierLabels = { tiny: 'Conservative', small: 'Moderate', standard: 'Standard', large: 'Relaxed', huge: 'Maximum', unknown: 'Conservative' };
+          infoText += ' \u2022 ' + (tierLabels[stats.vramTier] || stats.vramTier);
+        }
+        infoText += ')';
+      }
+      if (isEstimated) infoText += ' [est.]';
+      gpuVendorInfo.textContent = infoText;
+      gpuVendorInfo.style.display = 'block';
+    }
+    
+    if (isEstimated) {
+      // No live usage data - show GPU row but with static info
+      gpuRow.style.display = 'flex';
+      gpuBarFill.style.width = '0%';
+      gpuValue.textContent = '--';
+      gpuValue.title = 'Live monitoring not available for ' + vendor + ' GPUs on this system';
+      
+      // VRAM - show total if known, no usage data
+      const vramTotal = stats.gpu.vramTotalMb || 0;
+      if (vramTotal > 0) {
+        vramRow.style.display = 'flex';
+        vramBarFill.style.width = '0%';
+        if (vramTotal >= 1024) {
+          vramValue.textContent = (vramTotal / 1024).toFixed(0) + ' GB';
+          vramValue.title = 'Total VRAM: ' + (vramTotal / 1024).toFixed(1) + ' GB (estimated)';
+        } else {
+          vramValue.textContent = vramTotal + ' MB';
+          vramValue.title = 'Total VRAM: ' + vramTotal + ' MB (estimated)';
+        }
+      } else {
+        vramRow.style.display = 'none';
+      }
+    } else {
+      // Live monitoring available
+      gpuRow.style.display = 'flex';
+      const gpuPct = Math.round(stats.gpu.usagePercent || 0);
+      gpuBarFill.style.width = gpuPct + '%';
+      gpuBarFill.classList.toggle('high', gpuPct > 85);
+      gpuValue.textContent = gpuPct + '%';
+      gpuValue.title = stats.gpu.tempC ? stats.gpu.tempC + '\u00B0C' : '';
+      
+      // VRAM
+      vramRow.style.display = 'flex';
+      const vramUsed = stats.gpu.vramUsedMb || 0;
+      const vramTotal = stats.gpu.vramTotalMb || 0;
+      const vramPct = vramTotal > 0 ? Math.round((vramUsed / vramTotal) * 100) : 0;
+      vramBarFill.style.width = vramPct + '%';
+      vramBarFill.classList.toggle('high', vramPct > 85);
+      if (vramTotal >= 1024) {
+        vramValue.textContent = (vramUsed / 1024).toFixed(1) + ' GB';
+        vramValue.title = (vramUsed / 1024).toFixed(1) + ' / ' + (vramTotal / 1024).toFixed(1) + ' GB';
+      } else {
+        vramValue.textContent = vramUsed + ' MB';
+        vramValue.title = vramUsed + ' / ' + vramTotal + ' MB';
+      }
+    }
+  } else {
+    gpuRow.style.display = 'none';
+    vramRow.style.display = 'none';
+    if (gpuVendorInfo) gpuVendorInfo.style.display = 'none';
+  }
+  
+  // AI Model Badge
+  if (aiState && aiModelBadge) {
+    const status = aiState.chatModelStatus || 'unloaded';
+    aiModelBadge.className = 'ai-model-badge';
+    if (status === 'warm') {
+      aiModelBadge.textContent = 'AI: Warm';
+      aiModelBadge.classList.add('warm');
+    } else if (status === 'active') {
+      aiModelBadge.textContent = 'AI: Active';
+      aiModelBadge.classList.add('active');
+    } else if (status === 'loading') {
+      aiModelBadge.textContent = 'AI: Loading';
+      aiModelBadge.classList.add('loading');
+    } else if (status === 'timed_out') {
+      aiModelBadge.textContent = 'AI: Idle';
+      aiModelBadge.classList.add('timed-out');
+    } else {
+      aiModelBadge.textContent = 'AI: --';
+    }
+  }
 }
 
 // Check Ollama status

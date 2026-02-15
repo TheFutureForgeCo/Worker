@@ -686,6 +686,124 @@
       flex: 1;
     }
 
+    .resource-monitor {
+      padding: 12px 14px;
+      background: var(--bg-secondary);
+      border-radius: var(--radius);
+      border: 1px solid var(--border-subtle);
+    }
+
+    .resource-monitor-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+
+    .resource-monitor-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .ai-model-badge {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 10px;
+      background: var(--bg-tertiary);
+      color: var(--text-tertiary);
+      border: 1px solid var(--border-subtle);
+    }
+
+    .ai-model-badge.warm {
+      background: rgba(34, 197, 94, 0.15);
+      color: #22c55e;
+      border-color: rgba(34, 197, 94, 0.3);
+    }
+
+    .ai-model-badge.active {
+      background: rgba(59, 130, 246, 0.15);
+      color: #3b82f6;
+      border-color: rgba(59, 130, 246, 0.3);
+    }
+
+    .ai-model-badge.loading {
+      background: rgba(234, 179, 8, 0.15);
+      color: #eab308;
+      border-color: rgba(234, 179, 8, 0.3);
+    }
+
+    .ai-model-badge.timed-out {
+      background: rgba(156, 163, 175, 0.15);
+      color: #9ca3af;
+      border-color: rgba(156, 163, 175, 0.3);
+    }
+
+    .gpu-vendor-info {
+      font-size: 10px;
+      color: var(--text-tertiary);
+      margin-bottom: 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .resource-bars {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .resource-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .resource-label {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--text-tertiary);
+      width: 32px;
+      text-transform: uppercase;
+      flex-shrink: 0;
+    }
+
+    .resource-bar-track {
+      flex: 1;
+      height: 6px;
+      background: var(--bg-tertiary);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .resource-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.5s ease, background 0.3s ease;
+      min-width: 0;
+    }
+
+    .resource-bar-fill.cpu-bar { background: #3b82f6; }
+    .resource-bar-fill.gpu-bar { background: #8b5cf6; }
+    .resource-bar-fill.mem-bar { background: #06b6d4; }
+    .resource-bar-fill.vram-bar { background: #f59e0b; }
+
+    .resource-bar-fill.high { background: #ef4444; }
+
+    .resource-value {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      width: 42px;
+      text-align: right;
+      flex-shrink: 0;
+      font-variant-numeric: tabular-nums;
+    }
+
     .progress-bar {
       height: 4px;
       background: var(--bg-tertiary);
@@ -2519,6 +2637,44 @@
           <span class="ollama-status-text" id="ollamaStatus">Checking AI...</span>
           <div class="progress-bar" id="ollamaProgress" style="display: none;">
             <div class="progress-fill" id="ollamaProgressFill" style="width: 0%;"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="resource-monitor" id="resourceMonitorCard">
+        <div class="resource-monitor-header">
+          <span class="resource-monitor-title">System Resources</span>
+          <span class="ai-model-badge" id="aiModelBadge">AI: --</span>
+        </div>
+        <div class="gpu-vendor-info" id="gpuVendorInfo" style="display: none;"></div>
+        <div class="resource-bars">
+          <div class="resource-row">
+            <span class="resource-label">CPU</span>
+            <div class="resource-bar-track">
+              <div class="resource-bar-fill cpu-bar" id="cpuBarFill" style="width: 0%;"></div>
+            </div>
+            <span class="resource-value" id="cpuValue">0%</span>
+          </div>
+          <div class="resource-row" id="gpuRow" style="display: none;">
+            <span class="resource-label" id="gpuLabel">GPU</span>
+            <div class="resource-bar-track">
+              <div class="resource-bar-fill gpu-bar" id="gpuBarFill" style="width: 0%;"></div>
+            </div>
+            <span class="resource-value" id="gpuValue">0%</span>
+          </div>
+          <div class="resource-row">
+            <span class="resource-label">RAM</span>
+            <div class="resource-bar-track">
+              <div class="resource-bar-fill mem-bar" id="memBarFill" style="width: 0%;"></div>
+            </div>
+            <span class="resource-value" id="memValue">0%</span>
+          </div>
+          <div class="resource-row" id="vramRow" style="display: none;">
+            <span class="resource-label">VRAM</span>
+            <div class="resource-bar-track">
+              <div class="resource-bar-fill vram-bar" id="vramBarFill" style="width: 0%;"></div>
+            </div>
+            <span class="resource-value" id="vramValue">0 MB</span>
           </div>
         </div>
       </div>

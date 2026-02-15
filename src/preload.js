@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Status and config
   getStatus: () => ipcRenderer.invoke('get-status'),
+  getResourceStats: () => ipcRenderer.invoke('get-resource-stats'),
   getServerUrl: () => ipcRenderer.invoke('get-server-url'),
   saveConfig: (config) => ipcRenderer.invoke('save-config', config),
   
