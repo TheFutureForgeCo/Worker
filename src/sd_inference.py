@@ -113,10 +113,16 @@ def generate_tiled(pipe, prompt, negative_prompt, width, height, num_steps, guid
             x_start = col * (tile_size - overlap)
             y_start = row * (tile_size - overlap)
 
-            tile_w = min(tile_size, width - x_start)
-            tile_h = min(tile_size, height - y_start)
-            tile_w = ((tile_w + 7) // 8) * 8
-            tile_h = ((tile_h + 7) // 8) * 8
+            actual_tile_w = max(8, min(tile_size, width - x_start))
+            actual_tile_h = max(8, min(tile_size, height - y_start))
+            if use_sdxl:
+                tile_w = ((actual_tile_w + 63) // 64) * 64
+                tile_h = ((actual_tile_h + 63) // 64) * 64
+                if tile_w != actual_tile_w or tile_h != actual_tile_h:
+                    log(f"Tile {tile_num} padded: {actual_tile_w}x{actual_tile_h} -> {tile_w}x{tile_h} (SDXL 64-align)")
+            else:
+                tile_w = ((actual_tile_w + 7) // 8) * 8
+                tile_h = ((actual_tile_h + 7) // 8) * 8
 
             tile_seed = seed + row * cols + col
             gen = torch.Generator()
@@ -148,13 +154,17 @@ def generate_tiled(pipe, prompt, negative_prompt, width, height, num_steps, guid
             tile_img = result.images[0]
             log(f"Tile {tile_num} generated: {tile_img.size}")
 
+            if tile_img.size[0] > actual_tile_w or tile_img.size[1] > actual_tile_h:
+                tile_img = tile_img.crop((0, 0, actual_tile_w, actual_tile_h))
+                log(f"Tile {tile_num} cropped to: {tile_img.size}")
+
             if col == 0 and row == 0:
                 final_image.paste(tile_img, (x_start, y_start))
             else:
                 tile_arr = np.array(tile_img).astype(np.float32)
 
-                x_end = x_start + tile_w
-                y_end = y_start + tile_h
+                x_end = x_start + actual_tile_w
+                y_end = y_start + actual_tile_h
                 x_end = min(x_end, width)
                 y_end = min(y_end, height)
                 paste_w = x_end - x_start
